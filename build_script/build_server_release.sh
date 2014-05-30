@@ -60,7 +60,7 @@ cd builds/
 
 # tar it
 echo "Building Tarball ..."
-tar cfz $BUILD_NAME.tar $BUILD_NAME
+tar cf $BUILD_NAME.tar $BUILD_NAME
 gzip $BUILD_NAME.tar
 rm -rf ./$BUILD_NAME
 
