@@ -58,7 +58,6 @@ import org.graylog2.outputs.OutputRegistry;
 import org.graylog2.metrics.MongoDbMetricsReporter;
 import org.graylog2.plugin.GraylogServer;
 import org.graylog2.plugin.InputHost;
-import org.graylog2.plugin.Tools;
 import org.graylog2.plugin.Version;
 import org.graylog2.plugin.alarms.callbacks.AlarmCallback;
 import org.graylog2.plugin.alarms.transports.Transport;
@@ -173,6 +172,8 @@ public class Core implements GraylogServer, InputHost {
 
     private AtomicBoolean isProcessing = new AtomicBoolean(true);
     private AtomicBoolean processingPauseLocked = new AtomicBoolean(false);
+    private AtomicBoolean componentsInitialized = new AtomicBoolean(false);
+    private AtomicBoolean overallProcessing = new AtomicBoolean(false);
     
     private DateTime startedAt;
     private MetricRegistry metricRegistry;
@@ -282,7 +283,16 @@ public class Core implements GraylogServer, InputHost {
 
     @Override
     public void run() {
+        if (!componentsInitialized.get()) {
+            initializeComponents();
+        }
+        while (isOverallProcessing()) {
+            try { Thread.sleep(1000); } catch (InterruptedException e) { /* lol, i don't care */ }
+        }
+    }
 
+    void initializeComponents()
+    {
         gelfChunkManager.start();
         BlacklistCache.initialize(this);
 
@@ -314,6 +324,7 @@ public class Core implements GraylogServer, InputHost {
 
         // Load persisted inputs.
         inputs().launchPersisted();
+        componentsInitialized.set(true);
     }
 
     public void setLdapConnector(LdapConnector ldapConnector) {
@@ -703,6 +714,14 @@ public class Core implements GraylogServer, InputHost {
 
     public void setLifecycle(Lifecycle lifecycle) {
         this.lifecycle = lifecycle;
+    }
+
+    public boolean isOverallProcessing() {
+        return overallProcessing.get();
+    }
+    
+    public void setOverallProcessing(boolean processing) {
+        this.overallProcessing.set(processing);
     }
 
 }
