@@ -27,6 +27,7 @@ import com.google.common.collect.Maps;
 import com.google.common.util.concurrent.ThreadFactoryBuilder;
 import com.mongodb.BasicDBObjectBuilder;
 import com.mongodb.DBObject;
+
 import org.apache.shiro.mgt.DefaultSecurityManager;
 import org.cliffc.high_scale_lib.Counter;
 import org.glassfish.hk2.utilities.binding.AbstractBinder;
@@ -286,6 +287,17 @@ public class Core implements GraylogServer, InputHost {
         if (!componentsInitialized.get()) {
             initializeComponents();
         }
+
+        // Start REST API.
+        try {
+            startRestApi();
+        } catch(Exception e) {
+            LOG.error("Could not start REST API on <{}>. Terminating.", configuration.getRestListenUri(), e);
+            System.exit(1);
+        }
+
+        setLifecycle(Lifecycle.RUNNING);
+
         while (isOverallProcessing()) {
             try { Thread.sleep(1000); } catch (InterruptedException e) { /* lol, i don't care */ }
         }

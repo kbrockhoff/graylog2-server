@@ -286,6 +286,10 @@ public class ServerDaemon implements Daemon {
         
         // Set running
         executorService.execute(server);
+        
+        server.getActivityWriter().write(new Activity("Started up.", Main.class));
+        LOG.info("Graylog2 up and running.");
+
     }
 
     @Override
