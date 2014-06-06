@@ -286,7 +286,7 @@ public class GELFAMQPInput extends MessageInput {
     public void checkConfiguration() throws ConfigurationException
     {
         if (!configuration.stringIsSet(CK_HOSTNAME)
-                || configuration.stringIsSet(CK_QUEUE)) {
+                || !configuration.stringIsSet(CK_QUEUE)) {
             throw new ConfigurationException(configuration.getSource().toString());
         }
     }
