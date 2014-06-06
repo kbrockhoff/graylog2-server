@@ -24,6 +24,7 @@ import static com.codahale.metrics.MetricRegistry.name;
 import java.io.IOException;
 import java.net.InetAddress;
 import java.net.UnknownHostException;
+import java.util.Map;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -32,11 +33,11 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
 import org.apache.commons.lang.StringUtils;
-import org.graylog2.inputs.gelf.GELFInputBase;
 import org.graylog2.inputs.gelf.gelf.GELFMessage;
 import org.graylog2.inputs.gelf.gelf.GELFProcessor;
 import org.graylog2.plugin.InputHost;
 import org.graylog2.plugin.buffers.BufferOutOfCapacityException;
+import org.graylog2.plugin.configuration.ConfigurationException;
 import org.graylog2.plugin.configuration.ConfigurationRequest;
 import org.graylog2.plugin.configuration.fields.ConfigurationField;
 import org.graylog2.plugin.configuration.fields.NumberField;
@@ -62,10 +63,9 @@ import com.rabbitmq.client.ShutdownSignalException;
  *
  * @author Kevin Brockhoff <kbrockhoff@codekaizen.org>
  */
-public class GELFAMQPInput extends GELFInputBase {
+public class GELFAMQPInput extends MessageInput {
 
     public static final String CK_HOSTNAME = "broker_hostname";
-    public static final String CK_PORT = "broker_port";
     public static final String CK_VHOST = "broker_vhost";
     public static final String CK_USERNAME = "broker_username";
     public static final String CK_PASSWORD = "broker_password";
@@ -213,19 +213,8 @@ public class GELFAMQPInput extends GELFInputBase {
                         CK_HOSTNAME,
                         "Broker hostname",
                         "",
-                        "Hostname of the AMQP broker to use",
+                        "Comma-separated hostname:port list of the AMQP brokers to use",
                         ConfigurationField.Optional.NOT_OPTIONAL
-                )
-        );
-
-        cr.addField(
-                new NumberField(
-                        CK_PORT,
-                        "Broker port",
-                        5672,
-                        "Port of the AMQP broker to use",
-                        ConfigurationField.Optional.OPTIONAL,
-                        NumberField.Attribute.IS_PORT_NUMBER
                 )
         );
 
@@ -291,6 +280,21 @@ public class GELFAMQPInput extends GELFInputBase {
         );
 
         return cr;
+    }
+
+    @Override
+    public void checkConfiguration() throws ConfigurationException
+    {
+        if (!configuration.stringIsSet(CK_HOSTNAME)
+                || configuration.stringIsSet(CK_QUEUE)) {
+            throw new ConfigurationException(configuration.getSource().toString());
+        }
+    }
+
+    @Override
+    public Map<String, Object> getAttributes()
+    {
+        return configuration.getSource();
     }
 
     @Override
