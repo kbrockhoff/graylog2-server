@@ -37,6 +37,7 @@ import org.graylog2.filters.StreamMatcherFilter;
 import org.graylog2.initializers.DroolsInitializer;
 import org.graylog2.initializers.PeriodicalsInitializer;
 import org.graylog2.inputs.amqp.AMQPInput;
+import org.graylog2.inputs.gelf.amqp.GELFAMQPInput;
 import org.graylog2.inputs.gelf.http.GELFHttpInput;
 import org.graylog2.inputs.gelf.tcp.GELFTCPInput;
 import org.graylog2.inputs.gelf.udp.GELFUDPInput;
@@ -265,6 +266,7 @@ public class ServerDaemon implements Daemon {
         server.inputs().register(RadioKafkaInput.class, RadioKafkaInput.NAME);
         server.inputs().register(AMQPInput.class, AMQPInput.NAME);
         server.inputs().register(RadioAMQPInput.class, RadioAMQPInput.NAME);
+        server.inputs().register(GELFAMQPInput.class, GELFAMQPInput.NAME);
 
         // Register initializers.
         server.initializers().register(new DroolsInitializer());
