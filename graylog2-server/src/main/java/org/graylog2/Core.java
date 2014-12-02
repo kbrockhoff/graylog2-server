@@ -282,14 +282,6 @@ public class Core implements GraylogServer, InputHost {
         this.alarmCallbacks.add(alarmCallback);
     }
 
-    public boolean isRunning() {
-        return running.get();
-    }
-    
-    public void setRunning(boolean running) {
-        this.running.set(running);
-    }
-
     @Override
     public void run() {
         if (!componentsInitialized.get()) {
