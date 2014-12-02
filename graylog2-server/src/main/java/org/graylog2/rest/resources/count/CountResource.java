@@ -21,11 +21,12 @@ package org.graylog2.rest.resources.count;
 
 import com.codahale.metrics.annotation.Timed;
 import com.google.common.collect.Maps;
+import org.apache.shiro.authz.annotation.RequiresAuthentication;
+import org.apache.shiro.authz.annotation.RequiresPermissions;
 import org.graylog2.rest.documentation.annotations.Api;
 import org.graylog2.rest.documentation.annotations.ApiOperation;
 import org.graylog2.rest.resources.RestResource;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import org.graylog2.security.RestPermissions;
 
 import javax.ws.rs.GET;
 import javax.ws.rs.Path;
@@ -36,11 +37,13 @@ import java.util.Map;
 /**
  * @author Lennart Koopmann <lennart@torch.sh>
  */
+@RequiresAuthentication
 @Api(value = "Counts", description = "Message counts")
 @Path("/count")
 public class CountResource extends RestResource {
 
     @GET @Path("/total") @Timed
+    @RequiresPermissions(RestPermissions.MESSAGECOUNT_READ)
     @ApiOperation(value = "Total number of messages in all your indices.")
     @Produces(MediaType.APPLICATION_JSON)
     public String total() {

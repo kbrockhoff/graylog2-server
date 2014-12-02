@@ -22,11 +22,11 @@
 
 package org.graylog2.plugin.streams;
 
-import java.util.List;
-import java.util.Set;
-import org.bson.types.ObjectId;
 import org.graylog2.plugin.GraylogServer;
 import org.graylog2.plugin.alarms.AlarmReceiver;
+
+import java.util.List;
+import java.util.Set;
 
 /**
  *
@@ -36,14 +36,9 @@ public interface Stream {
 
     public List<StreamRule> getStreamRules();
     
-    public ObjectId getId();
+    public String getId();
 
     public String getTitle();
-    
-    public int getAlarmTimespan();
-    public int getAlarmMessageLimit();
-    public int getAlarmPeriod();
-    public Set<AlarmReceiver> getAlarmReceivers(GraylogServer server);
 
     @Override
     public String toString();

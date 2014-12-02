@@ -20,28 +20,32 @@
 
 package org.graylog2.streams;
 
-import java.util.*;
-
+import com.beust.jcommander.internal.Lists;
+import com.google.common.collect.Maps;
+import com.google.common.collect.Sets;
+import com.mongodb.BasicDBObject;
+import com.mongodb.DBObject;
 import org.bson.types.ObjectId;
 import org.graylog2.Core;
-import org.graylog2.database.*;
+import org.graylog2.alerts.AlertCondition;
+import org.graylog2.database.NotFoundException;
+import org.graylog2.database.Persisted;
+import org.graylog2.database.ValidationException;
 import org.graylog2.database.validators.DateValidator;
 import org.graylog2.database.validators.FilledStringValidator;
+import org.graylog2.database.validators.MapValidator;
 import org.graylog2.database.validators.Validator;
 import org.graylog2.plugin.GraylogServer;
 import org.graylog2.plugin.Tools;
 import org.graylog2.plugin.alarms.AlarmReceiver;
 import org.graylog2.plugin.streams.Stream;
 import org.graylog2.plugin.streams.StreamRule;
-
-import com.beust.jcommander.internal.Lists;
-import com.google.common.collect.Maps;
-import com.google.common.collect.Sets;
-import com.mongodb.BasicDBObject;
-import com.mongodb.DBObject;
+import org.graylog2.rest.resources.streams.requests.CreateRequest;
 import org.joda.time.DateTime;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import java.util.*;
 
 /**
  * Representing a single stream from the streams collection. Also provides method
@@ -54,6 +58,8 @@ public class StreamImpl extends Persisted implements Stream {
     private static final Logger LOG = LoggerFactory.getLogger(StreamImpl.class);
 
     private static final String COLLECTION = "streams";
+
+    public static final String EMBEDDED_ALERT_CONDITIONS = "alert_conditions";
 
     public StreamImpl(Map<String, Object> fields, Core core) {
     	super(core, fields);
@@ -108,6 +114,15 @@ public class StreamImpl extends Persisted implements Stream {
         return streams;
     }
 
+    public static List<Stream> loadAllWithConfiguredAlertConditions(Core core) {
+        Map<String, Object> queryOpts = new HashMap<String, Object>() {{
+            // Explanation: alert_conditions.1 is the first Array element.
+            put(StreamImpl.EMBEDDED_ALERT_CONDITIONS, new BasicDBObject("$ne", new ArrayList<Object>()));
+        }};
+
+        return loadAll(core, queryOpts);
+    }
+
     public void pause() {
         try {
             this.fields.put("disabled", true);
@@ -133,22 +148,7 @@ public class StreamImpl extends Persisted implements Stream {
     public boolean hasConfiguredOutputs(String typeClass) {
     	return false;
     }
-    
-    public boolean inAlarmGracePeriod() {
-    	return true;
-    }
-    
-    public void setLastAlarm(int timestamp, Core server) {
-    }
-    
-    public Set<String> getAlarmCallbacks() {
-    	return Sets.newHashSet();
-    }
 
-    public static Map<String, String> nameMap(Core server) {
-    	return Maps.newHashMap();
-    }
-    
 	@Override
 	public List<StreamRule> getStreamRules() {
 		// TODO Auto-generated method stub
@@ -166,45 +166,43 @@ public class StreamImpl extends Persisted implements Stream {
         return streamRules;
 	}
 
-	@Override
-	public int getAlarmTimespan() {
-		// TODO Auto-generated method stub
-		return 0;
-	}
+    public List<AlertCondition> getAlertConditions() {
+        List<AlertCondition> conditions = Lists.newArrayList();
 
-	@Override
-	public int getAlarmMessageLimit() {
-		// TODO Auto-generated method stub
-		return 0;
-	}
+        if (fields.containsKey(EMBEDDED_ALERT_CONDITIONS)) {
+            for (BasicDBObject conditionFields : (List<BasicDBObject>) fields.get(EMBEDDED_ALERT_CONDITIONS)) {
+                try {
+                    conditions.add(AlertCondition.fromPersisted(conditionFields, this, core));
+                } catch (AlertCondition.NoSuchAlertConditionTypeException e) {
+                    LOG.error("Skipping unknown alert condition type.", e);
+                    continue;
+                } catch (Exception e) {
+                    LOG.error("Skipping alert condition.", e);
+                    continue;
+                }
+            }
+        }
 
-	@Override
-	public int getAlarmPeriod() {
-		// TODO Auto-generated method stub
-		return 0;
-	}
+        return conditions;
+    }
 
-	@Override
-	public Set<AlarmReceiver> getAlarmReceivers(GraylogServer server) {
-		// TODO Auto-generated method stub
-		return null;
-	}
+    public void addAlertCondition(AlertCondition condition) throws ValidationException {
+        embed(EMBEDDED_ALERT_CONDITIONS, condition);
+    }
+
+    public void removeAlertCondition(String conditionId) {
+        removeEmbedded(EMBEDDED_ALERT_CONDITIONS, conditionId);
+    }
 	
     @Override
     public String toString() {
-        this.getStreamRules();
-        return this.id.toString() + ":" + this.getTitle();
+        return this.id.toString() + ": \"" + this.getTitle() + "\"";
     }
 
     @Override
     public String getCollectionName() {
         return COLLECTION;
     }
-
-    @Override
-	public ObjectId getId() {
-		return this.id;
-	}
 
     @Override
 	public String getTitle() {
@@ -245,6 +243,13 @@ public class StreamImpl extends Persisted implements Stream {
 
     @Override
     protected Map<String, Validator> getEmbeddedValidations(String key) {
+       if(key.equals(EMBEDDED_ALERT_CONDITIONS)) {
+            return new HashMap<String, Validator>() {{
+                put("id", new FilledStringValidator());
+                put("parameters", new MapValidator());
+            }};
+        }
+
         return Maps.newHashMap();
     }
 
@@ -255,4 +260,39 @@ public class StreamImpl extends Persisted implements Stream {
         }
         super.destroy();
     }
+
+    public void update(CreateRequest cr) throws ValidationException {
+        if (cr.title != null) {
+            this.fields.put("title", cr.title);
+        }
+
+        if (cr.description != null) {
+            this.fields.put("description", cr.description);
+        }
+
+        save();
+    }
+
+    public Map<String, List<String>> getAlertReceivers() {
+        if (!fields.containsKey("alert_receivers")) {
+            return Maps.newHashMap();
+        }
+
+        return (Map<String, List<String>>) fields.get("alert_receivers");
+    }
+
+    public void addAlertReceiver(String type, String name) {
+        collection().update(
+                new BasicDBObject("_id", id),
+                new BasicDBObject("$push", new BasicDBObject("alert_receivers." + type, name))
+        );
+    }
+
+    public void removeAlertReceiver(String type, String name) {
+        collection().update(
+                new BasicDBObject("_id", id),
+                new BasicDBObject("$pull", new BasicDBObject("alert_receivers." + type, name))
+        );
+    }
+
 }

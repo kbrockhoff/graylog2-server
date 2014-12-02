@@ -61,12 +61,12 @@ public class SyslogTCPInput extends SyslogInputBase {
 
         final ExecutorService bossThreadPool = Executors.newCachedThreadPool(
                 new ThreadFactoryBuilder()
-                        .setNameFormat("input-" + inputId + "-syslogtcp-boss-%d")
+                        .setNameFormat("input-" + getId() + "-syslogtcp-boss-%d")
                         .build());
 
         final ExecutorService workerThreadPool = Executors.newCachedThreadPool(
                 new ThreadFactoryBuilder()
-                        .setNameFormat("input-" + inputId + "-syslogtcp-worker-%d")
+                        .setNameFormat("input-" + getId() + "-syslogtcp-worker-%d")
                         .build());
 
         bootstrap = new ServerBootstrap(
@@ -74,6 +74,7 @@ public class SyslogTCPInput extends SyslogInputBase {
         );
 
         bootstrap.setPipelineFactory(new SyslogTCPPipelineFactory(graylogServer, configuration, this, throughputCounter, connectionCounter));
+        bootstrap.setOption("child.receiveBufferSize", getRecvBufferSize());
 
         try {
             channel = ((ServerBootstrap) bootstrap).bind(socketAddress);

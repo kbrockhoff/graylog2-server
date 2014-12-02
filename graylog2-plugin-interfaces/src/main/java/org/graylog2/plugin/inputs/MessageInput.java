@@ -1,5 +1,5 @@
 /**
- * Copyright (c) 2012 Lennart Koopmann <lennart@socketfeed.com>
+ * Copyright (c) 2013, 2014 Lennart Koopmann <lennart@socketfeed.com>
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy of
  * this software and associated documentation files (the "Software"), to deal in
@@ -22,8 +22,6 @@
 package org.graylog2.plugin.inputs;
 
 import com.google.common.collect.Maps;
-import com.google.common.collect.Sets;
-import org.graylog2.plugin.GraylogServer;
 import org.graylog2.plugin.InputHost;
 import org.graylog2.plugin.Tools;
 import org.graylog2.plugin.configuration.Configuration;
@@ -31,26 +29,32 @@ import org.graylog2.plugin.configuration.ConfigurationException;
 import org.graylog2.plugin.configuration.ConfigurationRequest;
 import org.graylog2.plugin.configuration.fields.TextField;
 import org.joda.time.DateTime;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
+import java.util.*;
 
 /**
  * @author Lennart Koopmann <lennart@socketfeed.com>
  */
 public abstract class MessageInput {
 
+    private static final Logger LOG = LoggerFactory.getLogger(MessageInput.class);
+
+    public static final String CK_RECV_BUFFER_SIZE = "recv_buffer_size";
+
+    private static long defaultRecvBufferSize = 1024 * 1024;
+
     protected String title;
     protected String creatorUserId;
-    protected String inputId;
     protected String persistId;
     protected DateTime createdAt;
+    protected Boolean global = false;
 
     protected Configuration configuration;
     protected InputHost graylogServer;
 
-    private Map<String, Extractor> extractors = Maps.newConcurrentMap();
+    private Map<String, Extractor> extractors = Maps.newHashMap(); // access is synchronized.
     private Map<String, String> staticFields = Maps.newConcurrentMap();
 
     public void initialize(Configuration configuration, InputHost graylogServer) {
@@ -70,16 +74,12 @@ public abstract class MessageInput {
     public abstract String linkToDocs();
     public abstract Map<String, Object> getAttributes();
 
-    public void setId(String id) {
-        this.inputId = id;
-    }
-
     public void setPersistId(String id) {
         this.persistId = id;
     }
 
     public String getId() {
-        return inputId;
+        return persistId;
     }
 
     public String getPersistId() {
@@ -112,6 +112,14 @@ public abstract class MessageInput {
 
     public Configuration getConfiguration() {
         return configuration;
+    }
+
+    public Boolean getGlobal() {
+        return global;
+    }
+
+    public void setGlobal(Boolean global) {
+        this.global = global;
     }
 
     public Object getAttributesWithMaskedPasswords() {
@@ -147,11 +155,12 @@ public abstract class MessageInput {
         inputMap.put("started_at", Tools.getISO8601String(this.getCreatedAt()));
         inputMap.put("attributes", this.getAttributesWithMaskedPasswords());
         inputMap.put("static_fields", this.getStaticFields());
+        inputMap.put("global", this.getGlobal());
 
         return inputMap;
     }
 
-    public void addExtractor(String id, Extractor extractor) {
+    public synchronized void addExtractor(String id, Extractor extractor) {
         this.extractors.put(id, extractor);
     }
 
@@ -172,4 +181,29 @@ public abstract class MessageInput {
         return readableId;
     }
 
+    @Override
+    public int hashCode() {
+        return getPersistId().hashCode();
+    }
+
+    @Override
+    public boolean equals(Object obj) {
+        if (obj instanceof MessageInput) {
+            MessageInput input = (MessageInput) obj;
+            return this.getPersistId().equals(input.getPersistId());
+        } else {
+            return false;
+        }
+    }
+
+    public static void setDefaultRecvBufferSize(long size) {
+        defaultRecvBufferSize = size;
+    }
+
+    public long getRecvBufferSize() {
+        if (configuration.intIsSet(CK_RECV_BUFFER_SIZE)) {
+            return configuration.getInt(CK_RECV_BUFFER_SIZE);
+        }
+        return defaultRecvBufferSize;
+    }
 }

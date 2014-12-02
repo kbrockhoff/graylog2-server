@@ -22,6 +22,7 @@
 
 package org.graylog2.plugin;
 
+import com.google.common.base.Function;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Maps;
@@ -31,10 +32,13 @@ import org.joda.time.DateTime;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.regex.Pattern;
+
+import static org.joda.time.DateTimeZone.UTC;
 
 
 /**
@@ -49,7 +53,7 @@ public class Message {
 
     private MessageInput sourceInput;
 
-    private static final Pattern ALPHANUMERIC_ASCII_AND_UNDERSCORE_AND_DOTS = Pattern.compile("^[\\w\\.]*$");
+    private static final Pattern VALID_KEY_CHARS = Pattern.compile("^[\\w\\.\\-]*$");
 
     // Used for drools to filter out messages.
     private boolean filterOut = false;
@@ -88,12 +92,16 @@ public class Message {
             "message", "source", "_id"
     );
 
+    public static final Function<Message, String> ID_FUNCTION = new MessageIdFunction();
+
     public Message(String message, String source, DateTime timestamp) {
     	// Adding the fields directly because they would not be accepted as a reserved fields.
         fields.put("_id", new com.eaio.uuid.UUID().toString());
         fields.put("message", message);
         fields.put("source", source);
         fields.put("timestamp", timestamp);
+
+        streams = Lists.newArrayList();
     }
 
     public Message(Map<String, Object> fields) {
@@ -110,6 +118,19 @@ public class Message {
         return true;
     }
 
+    public String getValidationErrors() {
+        StringBuilder sb = new StringBuilder();
+
+        for (String key : REQUIRED_FIELDS) {
+            if (getField(key) == null) {
+                sb.append(key).append(" is missing, ");
+            } else if (((String)getField(key)).isEmpty()) {
+                sb.append(key).append(" is empty, ");
+            }
+        }
+        return sb.toString();
+    }
+
     public String getId() {
         return (String) getField("_id");
     }
@@ -123,15 +144,18 @@ public class Message {
 
         // Add fields.
         obj.putAll(getFields());
-        
-        // Timestamp
-        obj.put("timestamp", Tools.buildElasticSearchTimeFormat((DateTime) getField("timestamp")));
+
+        if (getField("timestamp") instanceof DateTime) {
+            // Timestamp
+            obj.put("timestamp", Tools.buildElasticSearchTimeFormat(
+                    ((DateTime) getField("timestamp")).withZone(UTC)));
+        }
 
         // Manually converting stream ID to string - caused strange problems without it.
         if (getStreams().size() > 0) {
             List<String> streamIds = Lists.newArrayList();
             for (Stream stream : this.getStreams()) {
-                streamIds.add(stream.getId().toString());
+                streamIds.add(stream.getId());
             }
             obj.put("streams", streamIds);
         } else {
@@ -174,6 +198,10 @@ public class Message {
 
         if (String.class.equals(value.getClass())) {
             value = ((String) value).trim();
+
+            if (((String) value).isEmpty()) {
+                return;
+            }
         }
 
         // Don't accept protected keys. (some are allowed though lol)
@@ -181,8 +209,10 @@ public class Message {
             return;
         }
 
-        // Only allow alphanumeric characters (and underscores)
         if(!validKey(key)) {
+            if (LOG.isDebugEnabled()) {
+                LOG.debug("Ignoring invalid key {} for message {}", key, getId());
+            }
             return;
         }
 
@@ -190,7 +220,7 @@ public class Message {
     }
 
     public static boolean validKey(String key) {
-        return ALPHANUMERIC_ASCII_AND_UNDERSCORE_AND_DOTS.matcher(key).matches();
+        return VALID_KEY_CHARS.matcher(key).matches();
     }
 
     public void addFields(Map<String, Object> fields) {
@@ -213,12 +243,22 @@ public class Message {
         }
     }
 
-    public void addIntegerFields(Map<String, Integer> fields) {
+    public void addLongFields(Map<String, Long> fields) {
         if(fields == null) {
             return;
         }
 
-        for (Map.Entry<String, Integer> field : fields.entrySet()) {
+        for (Map.Entry<String, Long> field : fields.entrySet()) {
+            addField(field.getKey(), field.getValue());
+        }
+    }
+
+    public void addDoubleFields(Map<String, Double> fields) {
+        if(fields == null) {
+            return;
+        }
+
+        for (Map.Entry<String, Double> field : fields.entrySet()) {
             addField(field.getKey(), field.getValue());
         }
     }
@@ -227,6 +267,12 @@ public class Message {
     	if (!RESERVED_FIELDS.contains(key)) {
     		this.fields.remove(key);
     	}
+    }
+
+    public <T> T getFieldAs(Class<T> T, String key) throws ClassCastException{
+        Object rawField = getField(key);
+
+        return T.cast(rawField);
     }
     
     public Object getField(String key) {
@@ -243,6 +289,16 @@ public class Message {
 
     public List<Stream> getStreams() {
         return this.streams;
+    }
+
+    public List<String> getStreamIds() {
+        List<String> result = new ArrayList<String>();
+        try {
+            result.addAll(getFieldAs(result.getClass(), "streams"));
+        } catch (ClassCastException e) {
+        }
+
+        return result;
     }
     
     public void setFilterOut(boolean set) {
@@ -261,4 +317,10 @@ public class Message {
         this.sourceInput = input;
     }
 
+    public static class MessageIdFunction implements Function<Message, String> {
+        @Override
+        public String apply(Message input) {
+            return input.getId();
+        }
+    }
 }

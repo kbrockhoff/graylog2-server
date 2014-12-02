@@ -78,6 +78,8 @@ public abstract class Extractor implements EmbeddedPersistable {
     protected final ConditionType conditionType;
     protected final String conditionValue;
 
+    protected long order;
+
     protected Pattern regexConditionPattern;
 
     private final String totalTimerName;
@@ -87,6 +89,7 @@ public abstract class Extractor implements EmbeddedPersistable {
 
     public Extractor(String id,
                      String title,
+                     int order,
                      Type type,
                      CursorStrategy cursorStrategy,
                      String sourceField,
@@ -105,6 +108,7 @@ public abstract class Extractor implements EmbeddedPersistable {
 
         this.id = id;
         this.title = title;
+        this.order = order;
         this.superType = type;
         this.cursorStrategy = cursorStrategy;
         this.targetField = targetField;
@@ -155,7 +159,7 @@ public abstract class Extractor implements EmbeddedPersistable {
         }
 
         // Remove original from message?
-        if (cursorStrategy.equals(CursorStrategy.CUT) && !targetField.equals(sourceField)) {
+        if (cursorStrategy.equals(CursorStrategy.CUT) && !targetField.equals(sourceField) && !Message.RESERVED_FIELDS.contains(sourceField)) {
             StringBuilder sb = new StringBuilder(field);
 
             sb.delete(result.getBeginIndex(), result.getEndIndex());
@@ -192,12 +196,26 @@ public abstract class Extractor implements EmbeddedPersistable {
                     msg.removeField(targetField);
                     msg.addField(targetField, converted);
                 } else {
-                    msg.addFields((Map<String, Object>) converter.convert((String) msg.getFields().get(targetField)));
+                    @SuppressWarnings("unchecked")
+                    final Map<String, Object> convert = (Map<String, Object>) converter.convert((String) msg.getFields().get(
+                            targetField));
+                    for (String reservedField : Message.RESERVED_FIELDS) {
+                        if (convert.containsKey(reservedField)) {
+                            if (LOG.isDebugEnabled()) {
+                                LOG.debug(
+                                        "Not setting reserved field {} from converter {} on message {}, rest of the message is being processed",
+                                        new Object[]{reservedField, converter.getType(), msg.getId()});
+                            }
+                            converterExceptions.incrementAndGet();
+                            convert.remove(reservedField);
+                        }
+                    }
+
+                    msg.addFields(convert);
                 }
             } catch (Exception e) {
                 this.converterExceptions.incrementAndGet();
                 LOG.error("Could not apply converter [" + converter.getType() + "] of extractor [" + getId() + "].", e);
-                continue;
             }
         }
 
@@ -216,6 +234,14 @@ public abstract class Extractor implements EmbeddedPersistable {
 
     public String getTitle() {
         return title;
+    }
+
+    public Long getOrder() {
+        return order;
+    }
+
+    public void setOrder(long order) {
+        this.order = order;
     }
 
     public Type getType() {
@@ -254,6 +280,7 @@ public abstract class Extractor implements EmbeddedPersistable {
         return new HashMap<String, Object>() {{
             put("id", id);
             put("title", title);
+            put("order", order);
             put("type", superType.toString().toLowerCase());
             put("cursor_strategy", cursorStrategy.toString().toLowerCase());
             put("target_field", targetField);
@@ -272,7 +299,7 @@ public abstract class Extractor implements EmbeddedPersistable {
         for (Converter converter : converters) {
             Map<String, Object> config = Maps.newHashMap();
 
-            config.put("type", converter.getType().toString().toLowerCase());
+            config.put("type", converter.getType().toLowerCase());
             config.put("config", converter.getConfig());
 
             converterConfig.add(config);
@@ -326,4 +353,5 @@ public abstract class Extractor implements EmbeddedPersistable {
         }
 
     }
+
 }

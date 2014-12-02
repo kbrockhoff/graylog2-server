@@ -34,22 +34,26 @@ import org.graylog2.cluster.Node;
 import org.graylog2.cluster.NodeNotFoundException;
 import org.graylog2.filters.*;
 import org.graylog2.initializers.*;
+import org.graylog2.inputs.amqp.AMQPInput;
 import org.graylog2.inputs.gelf.tcp.GELFTCPInput;
 import org.graylog2.inputs.gelf.http.GELFHttpInput;
 import org.graylog2.inputs.gelf.udp.GELFUDPInput;
 import org.graylog2.inputs.kafka.KafkaInput;
 import org.graylog2.inputs.misc.jsonpath.JsonPathInput;
 import org.graylog2.inputs.misc.metrics.LocalMetricsInput;
-import org.graylog2.inputs.radio.RadioInput;
+import org.graylog2.inputs.radio.RadioAMQPInput;
+import org.graylog2.inputs.radio.RadioKafkaInput;
 import org.graylog2.inputs.random.FakeHttpMessageInput;
 import org.graylog2.inputs.raw.tcp.RawTCPInput;
 import org.graylog2.inputs.raw.udp.RawUDPInput;
 import org.graylog2.inputs.syslog.tcp.SyslogTCPInput;
 import org.graylog2.inputs.syslog.udp.SyslogUDPInput;
+import org.graylog2.outputs.BatchedElasticSearchOutput;
+import org.graylog2.plugin.lifecycles.Lifecycle;
 import org.graylog2.notifications.Notification;
-import org.graylog2.outputs.ElasticSearchOutput;
 import org.graylog2.plugin.Tools;
 import org.graylog2.plugin.initializers.InitializerConfigurationException;
+import org.graylog2.plugin.inputs.MessageInput;
 import org.graylog2.plugins.PluginInstaller;
 import org.graylog2.system.activities.Activity;
 import org.slf4j.Logger;
@@ -171,6 +175,8 @@ public final class Main {
 
         // Le server object. This is where all the magic happens.
         Core server = new Core();
+        server.setLifecycle(Lifecycle.STARTING);
+
         server.initialize(configuration, metrics);
 
         // Register this node.
@@ -197,9 +203,10 @@ public final class Main {
                 server.getActivityWriter().write(new Activity(what, Main.class));
 
                 // Write a notification.
-                if (Notification.isFirst(server, Notification.Type.MULTI_MASTER)) {
-                    Notification.publish(server, Notification.Type.MULTI_MASTER, Notification.Severity.URGENT);
-                }
+                Notification.buildNow(server)
+                        .addType(Notification.Type.MULTI_MASTER)
+                        .addSeverity(Notification.Severity.URGENT)
+                        .publishIfFirst();
 
                 configuration.setIsMaster(false);
             } else {
@@ -220,6 +227,14 @@ public final class Main {
             server.setStatsMode(true);
         }
 
+
+        if (!commandLineArguments.performRetention()) {
+            configuration.setPerformRetention(false);
+        }
+
+        // propagate default size to input plugins
+        MessageInput.setDefaultRecvBufferSize(configuration.getUdpRecvBufferSizes());
+
         // Register standard inputs.
         server.inputs().register(SyslogUDPInput.class, SyslogUDPInput.NAME);
         server.inputs().register(SyslogTCPInput.class, SyslogTCPInput.NAME);
@@ -232,23 +247,13 @@ public final class Main {
         server.inputs().register(LocalMetricsInput.class, LocalMetricsInput.NAME);
         server.inputs().register(JsonPathInput.class, JsonPathInput.NAME);
         server.inputs().register(KafkaInput.class, KafkaInput.NAME);
-        server.inputs().register(RadioInput.class, RadioInput.NAME);
+        server.inputs().register(RadioKafkaInput.class, RadioKafkaInput.NAME);
+        server.inputs().register(AMQPInput.class, AMQPInput.NAME);
+        server.inputs().register(RadioAMQPInput.class, RadioAMQPInput.NAME);
 
         // Register initializers.
         server.initializers().register(new DroolsInitializer());
-        server.initializers().register(new HostCounterCacheWriterInitializer());
-        server.initializers().register(new ThroughputCounterInitializer());
-        server.initializers().register(new NodePingInitializer());
-        server.initializers().register(new AlarmScannerInitializer());
-        if (configuration.isEnableGraphiteOutput())       { server.initializers().register(new GraphiteInitializer()); }
-        if (configuration.isEnableLibratoMetricsOutput()) { server.initializers().register(new LibratoMetricsInitializer()); }
-        server.initializers().register(new DeflectorThreadsInitializer());
-        server.initializers().register(new AnonymousInformationCollectorInitializer());
-        if (configuration.performRetention() && commandLineArguments.performRetention()) {
-            server.initializers().register(new IndexRetentionInitializer());
-        }
-        if (commandLineArguments.isStats()) { server.initializers().register(new StatisticsPrinterInitializer()); }
-        server.initializers().register(new MasterCacheWorkersInitializer());
+        server.initializers().register(new PeriodicalsInitializer());
 
         // Register message filters. (Order is important here)
         server.registerFilter(new StaticFieldFilter());
@@ -258,7 +263,7 @@ public final class Main {
         server.registerFilter(new RewriteFilter());
 
         // Register outputs.
-        server.outputs().register(new ElasticSearchOutput(server));
+        server.outputs().register(new BatchedElasticSearchOutput(server));
 
         // Start services.
         server.run();
@@ -271,6 +276,8 @@ public final class Main {
             System.exit(1);
         }
 
+        server.setLifecycle(Lifecycle.RUNNING);
+
         server.getActivityWriter().write(new Activity("Started up.", Main.class));
         LOG.info("Graylog2 up and running.");
 
@@ -281,8 +288,6 @@ public final class Main {
             }
         } catch (InterruptedException e) {
             return;
-        } finally {
-            LOG.info("Graylog2 {} exiting.", Core.GRAYLOG2_VERSION);
         }
     }
 

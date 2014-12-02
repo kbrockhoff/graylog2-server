@@ -20,6 +20,7 @@
 package org.graylog2.radio;
 
 import com.github.joschi.jadconfig.Parameter;
+import com.github.joschi.jadconfig.validators.InetPortValidator;
 import com.github.joschi.jadconfig.validators.PositiveIntegerValidator;
 import com.lmax.disruptor.*;
 import org.graylog2.plugin.Tools;
@@ -35,8 +36,15 @@ public class Configuration {
 
     private static final Logger LOG = LoggerFactory.getLogger(Configuration.class);
 
+    public enum TRANSPORT_TYPE {
+        AMQP, KAFKA
+    }
+
     @Parameter(value = "node_id_file", required = false)
     private String nodeIdFile = "/etc/graylog2-radio-node-id";
+
+    @Parameter(value = "transport_type", required = true)
+    private String transportType = "amqp";
 
     @Parameter(value = "rest_listen_uri", required = true)
     private String restListenUri = "http://127.0.0.1:12950/";
@@ -47,20 +55,35 @@ public class Configuration {
     @Parameter(value = "rest_transport_uri", required = false)
     private String restTransportUri;
 
-    @Parameter(value = "kafka_brokers", required = true)
+    @Parameter(value = "kafka_brokers", required = false)
     private String kafkaBrokers;
 
-    @Parameter(value = "kafka_required_acks", required = true)
+    @Parameter(value = "kafka_required_acks", required = false)
     private int kafkaRequiredAcks = 1;
 
-    @Parameter(value = "kafka_producer_type", required = true)
+    @Parameter(value = "kafka_producer_type", required = false)
     private String kafkaProducerType = "async";
 
-    @Parameter(value = "kafka_batch_size", required = true)
+    @Parameter(value = "kafka_batch_size", required = false)
     private int kafkaBatchSize = 200;
 
-    @Parameter(value = "kafka_batch_max_wait_ms", required = true)
+    @Parameter(value = "kafka_batch_max_wait_ms", required = false)
     private int kafkaBatchMaxWaitMs = 250;
+
+    @Parameter(value = "amqp_broker_hostname", required = false)
+    private String amqpHostname = "localhost";
+
+    @Parameter(value = "amqp_broker_port", required = false, validator = InetPortValidator.class)
+    private int amqpPort = 5672;
+
+    @Parameter(value = "amqp_broker_username", required = false)
+    private String amqpUsername;
+
+    @Parameter(value = "amqp_broker_password", required = false)
+    private String amqpPassword;
+
+    @Parameter(value = "amqp_broker_vhost", required = false)
+    private String amqpVhost = "/";
 
     @Parameter(value = "ring_size", required = true, validator = PositiveIntegerValidator.class)
     private int ringSize = 1024;
@@ -76,6 +99,14 @@ public class Configuration {
         return nodeIdFile;
     }
 
+    public TRANSPORT_TYPE getTransportType() {
+        try {
+            return TRANSPORT_TYPE.valueOf(transportType.toUpperCase());
+        } catch (IllegalArgumentException e) {
+            throw new RuntimeException("Invalid [transport_type] configured: " + transportType);
+        }
+    }
+
     public URI getRestListenUri() {
         return Tools.getUriStandard(restListenUri);
     }
@@ -86,6 +117,28 @@ public class Configuration {
         }
 
         return Tools.getUriStandard(restTransportUri);
+    }
+
+    public URI getDefaultRestTransportUri() {
+        URI transportUri;
+        URI listenUri = getRestListenUri();
+
+        if (listenUri.getHost().equals("0.0.0.0")) {
+            String guessedIf;
+            try {
+                guessedIf = Tools.guessPrimaryNetworkAddress().getHostAddress();
+            } catch (Exception e) {
+                LOG.error("Could not guess primary network address for rest_transport_uri. Please configure it in your graylog2.conf.", e);
+                throw new RuntimeException("No rest_transport_uri.");
+            }
+
+            String transportStr = "http://" + guessedIf + ":" + listenUri.getPort();
+            transportUri = Tools.getUriStandard(transportStr);
+        } else {
+            transportUri = listenUri;
+        }
+
+        return transportUri;
     }
 
     public URI getGraylog2ServerUri() {
@@ -148,6 +201,26 @@ public class Configuration {
 
     public int getKafkaBatchMaxWaitMs() {
         return kafkaBatchMaxWaitMs;
+    }
+
+    public String getAmqpPassword() {
+        return amqpPassword;
+    }
+
+    public String getAmqpUsername() {
+        return amqpUsername;
+    }
+
+    public String getAmqpVirtualHost() {
+        return amqpVhost;
+    }
+
+    public int getAmqpPort() {
+        return amqpPort;
+    }
+
+    public String getAmqpHostname() {
+        return amqpHostname;
     }
 
 }

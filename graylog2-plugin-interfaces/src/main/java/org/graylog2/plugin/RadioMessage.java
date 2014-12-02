@@ -21,6 +21,11 @@
  */
 package org.graylog2.plugin;
 
+import com.google.common.collect.Maps;
+import org.joda.time.DateTime;
+import org.msgpack.MessagePack;
+
+import java.io.IOException;
 import java.util.Map;
 
 /**
@@ -30,7 +35,36 @@ import java.util.Map;
 public class RadioMessage {
 
     public Map<String, String> strings;
-    public Map<String, Integer> ints;
+    public Map<String, Long> longs;
+    public Map<String, Double> doubles;
     public long timestamp;
+
+    public static byte[] serialize(MessagePack pack, Message msg) throws IOException {
+        Map<String, Long> longs = Maps.newHashMap();
+        Map<String, String> strings = Maps.newHashMap();
+        Map<String, Double> doubles = Maps.newHashMap();
+
+        for(Map.Entry<String, Object> field : msg.getFields().entrySet()) {
+            if (field.getValue() instanceof String) {
+                strings.put(field.getKey(), (String) field.getValue());
+            } else if (field.getValue() instanceof Long || field.getValue() instanceof Integer) {
+                longs.put(field.getKey(), ((Number) field.getValue()).longValue());
+            } else if (field.getValue() instanceof Double || field.getValue() instanceof Float) {
+                doubles.put(field.getKey(), ((Number) field.getValue()).doubleValue());
+            } else if (field.getValue() instanceof Boolean) {
+                strings.put(field.getKey(), field.getValue().toString());
+            } else if (field.getValue() instanceof Character) {
+                strings.put(field.getKey(), String.valueOf(field.getValue()));
+            }
+        }
+
+        RadioMessage radioMessage = new RadioMessage();
+        radioMessage.strings = strings;
+        radioMessage.longs = longs;
+        radioMessage.doubles = doubles;
+        radioMessage.timestamp = ((DateTime) msg.getField("timestamp")).getMillis();
+
+        return pack.write(radioMessage);
+    }
 
 }

@@ -25,20 +25,25 @@ import com.fasterxml.jackson.jaxrs.json.JacksonJsonProvider;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Maps;
 import com.google.common.util.concurrent.ThreadFactoryBuilder;
+import com.mongodb.BasicDBObjectBuilder;
+import com.mongodb.DBObject;
+
 import org.apache.shiro.mgt.DefaultSecurityManager;
 import org.cliffc.high_scale_lib.Counter;
 import org.glassfish.hk2.utilities.binding.AbstractBinder;
+import org.glassfish.jersey.message.GZipEncoder;
 import org.glassfish.jersey.server.ContainerFactory;
 import org.glassfish.jersey.server.ResourceConfig;
+import org.glassfish.jersey.server.filter.EncodingFilter;
 import org.glassfish.jersey.server.internal.scanning.PackageNamesScanner;
 import org.graylog2.blacklists.BlacklistCache;
 import org.graylog2.buffers.OutputBuffer;
 import org.graylog2.buffers.ProcessBuffer;
 import org.graylog2.dashboards.DashboardRegistry;
-import org.graylog2.database.HostCounterCacheImpl;
 import org.graylog2.database.MongoBridge;
 import org.graylog2.database.MongoConnection;
 import org.graylog2.indexer.Deflector;
+import org.graylog2.indexer.IndexFailure;
 import org.graylog2.indexer.Indexer;
 import org.graylog2.initializers.Initializers;
 import org.graylog2.inputs.BasicCache;
@@ -46,11 +51,14 @@ import org.graylog2.inputs.Cache;
 import org.graylog2.inputs.InputRegistry;
 import org.graylog2.inputs.gelf.gelf.GELFChunkManager;
 import org.graylog2.jersey.container.netty.NettyContainer;
+import org.graylog2.plugin.lifecycles.Lifecycle;
 import org.graylog2.metrics.jersey2.MetricsDynamicBinding;
+import org.graylog2.periodical.Periodicals;
+import org.graylog2.rest.RestAccessLogFilter;
 import org.graylog2.outputs.OutputRegistry;
+import org.graylog2.metrics.MongoDbMetricsReporter;
 import org.graylog2.plugin.GraylogServer;
 import org.graylog2.plugin.InputHost;
-import org.graylog2.plugin.Tools;
 import org.graylog2.plugin.Version;
 import org.graylog2.plugin.alarms.callbacks.AlarmCallback;
 import org.graylog2.plugin.alarms.transports.Transport;
@@ -65,6 +73,7 @@ import org.graylog2.plugin.rest.JacksonPropertyExceptionMapper;
 import org.graylog2.plugin.streams.Stream;
 import org.graylog2.plugin.system.NodeId;
 import org.graylog2.plugins.PluginLoader;
+import org.graylog2.rest.CORSFilter;
 import org.graylog2.rest.ObjectMapperProvider;
 import org.graylog2.security.ShiroSecurityBinding;
 import org.graylog2.security.ShiroSecurityContextFactory;
@@ -74,6 +83,7 @@ import org.graylog2.streams.StreamImpl;
 import org.graylog2.system.activities.Activity;
 import org.graylog2.system.activities.ActivityWriter;
 import org.graylog2.system.jobs.SystemJobManager;
+import org.graylog2.system.shutdown.GracefulShutdown;
 import org.jboss.netty.bootstrap.ServerBootstrap;
 import org.jboss.netty.channel.ChannelPipeline;
 import org.jboss.netty.channel.ChannelPipelineFactory;
@@ -89,13 +99,13 @@ import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Server core, handling and holding basically everything.
@@ -108,6 +118,8 @@ public class Core implements GraylogServer, InputHost {
 
     private static final Logger LOG = LoggerFactory.getLogger(Core.class);
 
+    private Lifecycle lifecycle = Lifecycle.UNINITIALIZED;
+
     private MongoConnection mongoConnection;
     private MongoBridge mongoBridge;
     private Configuration configuration;
@@ -116,16 +128,17 @@ public class Core implements GraylogServer, InputHost {
 
     private static final int SCHEDULED_THREADS_POOL_SIZE = 30;
     private ScheduledExecutorService scheduler;
+    private ScheduledExecutorService daemonScheduler;
 
     public static final Version GRAYLOG2_VERSION = ServerVersion.VERSION;
-    public static final String GRAYLOG2_CODENAME = "Amigo Humanos (Flipper)";
+    public static final String GRAYLOG2_CODENAME = "Moose";
 
     private Indexer indexer;
 
-    private HostCounterCacheImpl hostCounterCache;
-
     private Counter benchmarkCounter = new Counter();
     private Counter throughputCounter = new Counter();
+    private AtomicReference<ConcurrentHashMap<String, Counter>> streamThroughput =
+            new AtomicReference<ConcurrentHashMap<String, Counter>>(new ConcurrentHashMap<String, Counter>());
     private long throughput = 0;
 
     private List<MessageFilter> filters = Lists.newArrayList();
@@ -135,6 +148,7 @@ public class Core implements GraylogServer, InputHost {
     private Initializers initializers;
     private InputRegistry inputs;
     private OutputRegistry outputs;
+    private Periodicals periodicals;
 
     private DashboardRegistry dashboards;
     
@@ -159,13 +173,16 @@ public class Core implements GraylogServer, InputHost {
 
     private AtomicBoolean isProcessing = new AtomicBoolean(true);
     private AtomicBoolean processingPauseLocked = new AtomicBoolean(false);
-    private AtomicBoolean running = new AtomicBoolean(false);
-
+    private AtomicBoolean componentsInitialized = new AtomicBoolean(false);
+    private AtomicBoolean overallProcessing = new AtomicBoolean(false);
+    
     private DateTime startedAt;
     private MetricRegistry metricRegistry;
     private LdapUserAuthenticator ldapUserAuthenticator;
     private LdapConnector ldapConnector;
     private DefaultSecurityManager securityManager;
+    private MongoDbMetricsReporter metricsReporter;
+    private AtomicReference<HashMap<String, Counter>> currentStreamThroughput = new AtomicReference<HashMap<String, Counter>>();
 
     public void initialize(Configuration configuration, MetricRegistry metrics) {
     	startedAt = new DateTime(DateTimeZone.UTC);
@@ -174,21 +191,16 @@ public class Core implements GraylogServer, InputHost {
         this.nodeId = id.readOrGenerate();
 
         this.metricRegistry = metrics;
-        
         this.configuration = configuration; // TODO use dependency injection
 
-        if (this.configuration.getRestTransportUri() == null) {
-                String guessedIf;
-                try {
-                    guessedIf = Tools.guessPrimaryNetworkAddress().getHostAddress();
-                } catch (Exception e) {
-                    LOG.error("Could not guess primary network address for rest_transport_uri. Please configure it in your graylog2.conf.", e);
-                    throw new RuntimeException("No rest_transport_uri.");
-                }
+        if (configuration.isMetricsCollectionEnabled()) {
+            metricsReporter = MongoDbMetricsReporter.forRegistry(this, metricRegistry).build();
+            metricsReporter.start(1, TimeUnit.SECONDS);
+        }
 
-                String transportStr = "http://" + guessedIf + ":" + configuration.getRestListenUri().getPort();
-                LOG.info("No rest_transport_uri set. Falling back to [{}].", transportStr);
-                this.configuration.setRestTransportUri(transportStr);
+        if (this.configuration.getRestTransportUri() == null) {
+            configuration.setRestTransportUri(configuration.getDefaultRestTransportUri().toString());
+            LOG.info("No rest_transport_uri set. Falling back to [{}].", configuration.getRestTransportUri().toString());
         }
 
         mongoConnection = new MongoConnection();    // TODO use dependency injection
@@ -209,6 +221,7 @@ public class Core implements GraylogServer, InputHost {
         initializers = new Initializers(this);
         inputs = new InputRegistry(this);
         outputs = new OutputRegistry(this);
+        periodicals = new Periodicals(this);
 
         if (isMaster()) {
             dashboards = new DashboardRegistry(this);
@@ -219,8 +232,6 @@ public class Core implements GraylogServer, InputHost {
 
         systemJobManager = new SystemJobManager(this);
 
-        hostCounterCache = new HostCounterCacheImpl();
-        
         inputCache = new BasicCache();
         outputCache = new BasicCache();
     
@@ -232,12 +243,29 @@ public class Core implements GraylogServer, InputHost {
 
         gelfChunkManager = new GELFChunkManager(this);
 
-        indexer = new Indexer(this);
+        // Make sure that the index failures collection is always created capped.
+        if(!mongoConnection.getDatabase().collectionExists(IndexFailure.COLLECTION)) {
+            DBObject options = BasicDBObjectBuilder.start()
+                    .add("capped", true)
+                    .add("size", 52428800) // 50MB max size.
+                    .get();
 
+            mongoConnection.getDatabase().createCollection(IndexFailure.COLLECTION, options);
+        }
+
+        indexer = new Indexer(this);
+        indexer.start();
+
+        final Core core = this;
         Runtime.getRuntime().addShutdownHook(new Thread() {
             @Override
             public void run() {
-                activityWriter.write(new Activity("Shutting down.", GraylogServer.class));
+                String msg = "SIGNAL received. Shutting down.";
+                LOG.info(msg);
+                activityWriter.write(new Activity(msg, Core.class));
+
+                GracefulShutdown gs = new GracefulShutdown(core);
+                gs.run();
             }
         });
     }
@@ -264,7 +292,27 @@ public class Core implements GraylogServer, InputHost {
 
     @Override
     public void run() {
+        if (!componentsInitialized.get()) {
+            initializeComponents();
+        }
 
+        // Start REST API.
+        try {
+            startRestApi();
+        } catch(Exception e) {
+            LOG.error("Could not start REST API on <{}>. Terminating.", configuration.getRestListenUri(), e);
+            System.exit(1);
+        }
+
+        setLifecycle(Lifecycle.RUNNING);
+
+        while (isOverallProcessing()) {
+            try { Thread.sleep(1000); } catch (InterruptedException e) { /* lol, i don't care */ }
+        }
+    }
+
+    void initializeComponents()
+    {
         gelfChunkManager.start();
         BlacklistCache.initialize(this);
 
@@ -276,16 +324,18 @@ public class Core implements GraylogServer, InputHost {
         scheduler = Executors.newScheduledThreadPool(SCHEDULED_THREADS_POOL_SIZE,
                 new ThreadFactoryBuilder()
                         .setNameFormat("scheduled-%d")
+                        .setDaemon(false)
+                        .build()
+        );
+
+        daemonScheduler = Executors.newScheduledThreadPool(SCHEDULED_THREADS_POOL_SIZE,
+                new ThreadFactoryBuilder()
+                        .setNameFormat("scheduled-%d")
                         .setDaemon(true)
                         .build()
         );
 
         // Load and register plugins.
-        registerPlugins(MessageFilter.class, "filters");
-        registerPlugins(MessageOutput.class, "outputs");
-        registerPlugins(AlarmCallback.class, "alarm_callbacks");
-        registerPlugins(Transport.class, "transports");
-        registerPlugins(Initializer.class, "initializers");
         registerPlugins(MessageInput.class, "inputs");
 
         // Ramp it all up. (both plugins and built-in types)
@@ -294,56 +344,7 @@ public class Core implements GraylogServer, InputHost {
 
         // Load persisted inputs.
         inputs().launchPersisted();
-
-        /*
-        // Initialize all registered transports.
-        for (Transport transport : this.transports) {
-            try {
-                transport.initialize(PluginConfiguration.load(this, transport.getClass().getCanonicalName()));
-                LOG.debug("Initialized transport: {}", transport.getName());
-            } catch (TransportConfigurationException e) {
-                LOG.error("Could not initialize transport <" + transport.getName() + ">"
-                        + " because of missing or invalid configuration.", e);
-            }
-        }
-
-        // Initialize all registered alarm callbacks.
-        for (AlarmCallback callback : this.alarmCallbacks) {
-            try {
-                callback.initialize(PluginConfiguration.load(this, callback.getClass().getCanonicalName()));
-                LOG.debug("Initialized alarm callback: {}", callback.getName());
-            } catch(AlarmCallbackConfigurationException e) {
-                LOG.error("Could not initialize alarm callback <" + callback.getName() + ">"
-                        + " because of missing or invalid configuration.", e);
-            }
-        }
-
-        // Initialize all registered inputs.
-        for (MessageInput input : this.inputs) {
-            try {
-                // This is a plugin. Initialize with custom config from Mongo.
-                input.initialize(PluginConfiguration.load(this, input.getClass().getCanonicalName()), this);
-                LOG.debug("Initialized input: {}", input.getName());
-            } catch (MessageInputConfigurationException e) {
-                LOG.error("Could not initialize input <{}>.", input.getClass().getCanonicalName(), e);
-            }
-        }
-
-        // Initialize all registered outputs.
-        for (MessageOutput output : this.outputs) {
-            try {
-                output.initialize(PluginConfiguration.load(this, output.getClass().getCanonicalName()));
-                LOG.debug("Initialized output: {}", output.getName());
-            } catch(MessageOutputConfigurationException e) {
-                LOG.error("Could not initialize output <" + output.getName() + ">"
-                        + " because of missing or invalid configuration.", e);
-            }
-        }*/
-
-        while (isRunning()) {
-            try { Thread.sleep(1000); } catch (InterruptedException e) { /* lol, i don't care */ }
-        }
-
+        componentsInitialized.set(true);
     }
 
     public void setLdapConnector(LdapConnector ldapConnector) {
@@ -360,6 +361,31 @@ public class Core implements GraylogServer, InputHost {
 
     public void setSecurityManager(DefaultSecurityManager securityManager) {
         this.securityManager = securityManager;
+    }
+
+    public void incrementStreamThroughput(String streamId) {
+        final ConcurrentHashMap<String, Counter> counterMap = streamThroughput.get();
+        Counter counter;
+        synchronized (counterMap) {
+            counter = counterMap.get(streamId);
+            if (counter == null) {
+                counter = new Counter();
+                counterMap.put(streamId, counter);
+            }
+        }
+        counter.increment();
+    }
+
+    public Map<String, Counter> cycleStreamThroughput() {
+        return streamThroughput.getAndSet(new ConcurrentHashMap<String, Counter>());
+    }
+
+    public void setCurrentStreamThroughput(HashMap<String, Counter> throughput) {
+        currentStreamThroughput.set(throughput);
+    }
+
+    public HashMap<String, Counter> getCurrentStreamThroughput() {
+        return currentStreamThroughput.get();
     }
 
     private class Graylog2Binder extends AbstractBinder {
@@ -390,11 +416,25 @@ public class Core implements GraylogServer, InputHost {
 
         ResourceConfig rc = new ResourceConfig()
                 .property(NettyContainer.PROPERTY_BASE_URI, configuration.getRestListenUri())
-                .registerClasses(MetricsDynamicBinding.class, JacksonPropertyExceptionMapper.class, AnyExceptionClassMapper.class, ShiroSecurityBinding.class)
+                .registerClasses(MetricsDynamicBinding.class,
+                        JacksonPropertyExceptionMapper.class,
+                        AnyExceptionClassMapper.class,
+                        ShiroSecurityBinding.class,
+                        RestAccessLogFilter.class)
                 .register(new Graylog2Binder())
                 .register(ObjectMapperProvider.class)
                 .register(JacksonJsonProvider.class)
                 .registerFinder(new PackageNamesScanner(new String[]{"org.graylog2.rest.resources"}, true));
+
+        if (configuration.isRestEnableGzip())
+            EncodingFilter.enableFor(rc, GZipEncoder.class);
+
+        if (configuration.isRestEnableCors()) {
+            LOG.info("Enabling CORS for REST API");
+            rc.register(CORSFilter.class);
+        }
+
+        /*rc = rc.registerFinder(new PackageNamesScanner(new String[]{"org.graylog2.rest.resources"}, true));*/
 
         final NettyContainer jerseyHandler = ContainerFactory.createContainer(NettyContainer.class, rc);
         jerseyHandler.setSecurityContextFactory(new ShiroSecurityContextFactory(this));
@@ -413,13 +453,11 @@ public class Core implements GraylogServer, InputHost {
         bootstrap.setOption("child.tcpNoDelay", true);
         bootstrap.setOption("child.keepAlive", true);
 
-        bootstrap.bind(new InetSocketAddress(configuration.getRestListenUri().getPort()));
-        Runtime.getRuntime().addShutdownHook(new Thread() {
-            @Override
-            public void run() {
-                bootstrap.releaseExternalResources();
-            }
-        });
+        bootstrap.bind(new InetSocketAddress(
+                configuration.getRestListenUri().getHost(),
+                configuration.getRestListenUri().getPort()
+        ));
+
         LOG.info("Started REST API at <{}>", configuration.getRestListenUri());
     }
 
@@ -457,6 +495,10 @@ public class Core implements GraylogServer, InputHost {
 
     public ScheduledExecutorService getScheduler() {
         return scheduler;
+    }
+
+    public ScheduledExecutorService getDaemonScheduler() {
+        return daemonScheduler;
     }
     
     public void setConfiguration(Configuration configuration) {
@@ -513,10 +555,6 @@ public class Core implements GraylogServer, InputHost {
         return this.alarmCallbacks;
     }
 
-    public HostCounterCacheImpl getHostCounterCache() {
-        return this.hostCounterCache;
-    }
-    
     public Deflector getDeflector() {
         return this.deflector;
     }
@@ -611,8 +649,8 @@ public class Core implements GraylogServer, InputHost {
     }
 
     public void pauseMessageProcessing(boolean locked) {
-        // TODO: properly pause and restart AMQP inputs.
         isProcessing.set(false);
+        setLifecycle(Lifecycle.PAUSED);
 
         // Never override pause lock if already locked.
         if (!processingPauseLocked.get()) {
@@ -627,6 +665,7 @@ public class Core implements GraylogServer, InputHost {
         }
 
         isProcessing.set(true);
+        setLifecycle(Lifecycle.RUNNING);
     }
 
     public boolean processingPauseLocked() {
@@ -677,6 +716,10 @@ public class Core implements GraylogServer, InputHost {
         return outputs;
     }
 
+    public Periodicals periodicals() {
+        return periodicals;
+    }
+
     public DashboardRegistry dashboards() {
         if (!isMaster()) {
             throw new RuntimeException("Dashboards can only be accessed on master nodes.");
@@ -684,4 +727,21 @@ public class Core implements GraylogServer, InputHost {
 
         return dashboards;
     }
+
+    public Lifecycle getLifecycle() {
+        return lifecycle;
+    }
+
+    public void setLifecycle(Lifecycle lifecycle) {
+        this.lifecycle = lifecycle;
+    }
+
+    public boolean isOverallProcessing() {
+        return overallProcessing.get();
+    }
+    
+    public void setOverallProcessing(boolean processing) {
+        this.overallProcessing.set(processing);
+    }
+
 }

@@ -20,37 +20,45 @@
 
 package org.graylog2;
 
-import java.io.IOException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 import org.apache.commons.daemon.Daemon;
 import org.apache.commons.daemon.DaemonContext;
 import org.apache.commons.daemon.DaemonInitException;
-import org.apache.commons.io.IOUtils;
 import org.apache.log4j.Level;
 import org.graylog2.cluster.Node;
 import org.graylog2.cluster.NodeNotFoundException;
-import org.graylog2.filters.*;
-import org.graylog2.initializers.*;
-import org.graylog2.inputs.gelf.tcp.GELFTCPInput;
+import org.graylog2.filters.BlacklistFilter;
+import org.graylog2.filters.ExtractorFilter;
+import org.graylog2.filters.RewriteFilter;
+import org.graylog2.filters.StaticFieldFilter;
+import org.graylog2.filters.StreamMatcherFilter;
+import org.graylog2.initializers.DroolsInitializer;
+import org.graylog2.initializers.PeriodicalsInitializer;
+import org.graylog2.inputs.amqp.AMQPInput;
+import org.graylog2.inputs.gelf.amqp.GELFAMQPInput;
 import org.graylog2.inputs.gelf.http.GELFHttpInput;
+import org.graylog2.inputs.gelf.tcp.GELFTCPInput;
 import org.graylog2.inputs.gelf.udp.GELFUDPInput;
 import org.graylog2.inputs.kafka.KafkaInput;
 import org.graylog2.inputs.misc.jsonpath.JsonPathInput;
 import org.graylog2.inputs.misc.metrics.LocalMetricsInput;
-import org.graylog2.inputs.radio.RadioInput;
+import org.graylog2.inputs.radio.RadioAMQPInput;
+import org.graylog2.inputs.radio.RadioKafkaInput;
 import org.graylog2.inputs.random.FakeHttpMessageInput;
 import org.graylog2.inputs.raw.tcp.RawTCPInput;
 import org.graylog2.inputs.raw.udp.RawUDPInput;
 import org.graylog2.inputs.syslog.tcp.SyslogTCPInput;
 import org.graylog2.inputs.syslog.udp.SyslogUDPInput;
-import org.graylog2.notifications.Notification;
-import org.graylog2.outputs.ElasticSearchOutput;
 import org.graylog2.plugin.Tools;
 import org.graylog2.plugin.initializers.InitializerConfigurationException;
+import org.graylog2.plugin.inputs.MessageInput;
+import org.graylog2.plugin.lifecycles.Lifecycle;
 import org.graylog2.plugins.PluginInstaller;
 import org.graylog2.system.activities.Activity;
+import org.graylog2.notifications.Notification;
+import org.graylog2.outputs.BatchedElasticSearchOutput;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.bridge.SLF4JBridgeHandler;
@@ -89,8 +97,10 @@ public class ServerDaemon implements Daemon {
     }
 
     @Override
-    public void start() throws RepositoryException, ValidationException, IOException {
+    public void start() throws RepositoryException, ValidationException {
         
+        // So jung kommen wir nicht mehr zusammen.
+
         final CommandLineArguments commandLineArguments = new CommandLineArguments();
         final JCommander jCommander = new JCommander(commandLineArguments, args);
         jCommander.setProgramName("graylog2");
@@ -181,8 +191,10 @@ public class ServerDaemon implements Daemon {
 
         // Le server object. This is where all the magic happens.
         Core server = new Core();
-        server.initialize(configuration, metrics);
+        server.setLifecycle(Lifecycle.STARTING);
 
+        server.initialize(configuration, metrics);
+        
         // Register this node.
         Node.registerServer(server, configuration.isMaster(), configuration.getRestTransportUri());
 
@@ -207,9 +219,10 @@ public class ServerDaemon implements Daemon {
                 server.getActivityWriter().write(new Activity(what, Main.class));
 
                 // Write a notification.
-                if (Notification.isFirst(server, Notification.Type.MULTI_MASTER)) {
-                    Notification.publish(server, Notification.Type.MULTI_MASTER, Notification.Severity.URGENT);
-                }
+                Notification.buildNow(server)
+                        .addType(Notification.Type.MULTI_MASTER)
+                        .addSeverity(Notification.Severity.URGENT)
+                        .publishIfFirst();
 
                 configuration.setIsMaster(false);
             } else {
@@ -230,6 +243,14 @@ public class ServerDaemon implements Daemon {
             server.setStatsMode(true);
         }
 
+
+        if (!commandLineArguments.performRetention()) {
+            configuration.setPerformRetention(false);
+        }
+
+        // propagate default size to input plugins
+        MessageInput.setDefaultRecvBufferSize(configuration.getUdpRecvBufferSizes());
+
         // Register standard inputs.
         server.inputs().register(SyslogUDPInput.class, SyslogUDPInput.NAME);
         server.inputs().register(SyslogTCPInput.class, SyslogTCPInput.NAME);
@@ -242,23 +263,14 @@ public class ServerDaemon implements Daemon {
         server.inputs().register(LocalMetricsInput.class, LocalMetricsInput.NAME);
         server.inputs().register(JsonPathInput.class, JsonPathInput.NAME);
         server.inputs().register(KafkaInput.class, KafkaInput.NAME);
-        server.inputs().register(RadioInput.class, RadioInput.NAME);
+        server.inputs().register(RadioKafkaInput.class, RadioKafkaInput.NAME);
+        server.inputs().register(AMQPInput.class, AMQPInput.NAME);
+        server.inputs().register(RadioAMQPInput.class, RadioAMQPInput.NAME);
+        server.inputs().register(GELFAMQPInput.class, GELFAMQPInput.NAME);
 
         // Register initializers.
         server.initializers().register(new DroolsInitializer());
-        server.initializers().register(new HostCounterCacheWriterInitializer());
-        server.initializers().register(new ThroughputCounterInitializer());
-        server.initializers().register(new NodePingInitializer());
-        server.initializers().register(new AlarmScannerInitializer());
-        if (configuration.isEnableGraphiteOutput())       { server.initializers().register(new GraphiteInitializer()); }
-        if (configuration.isEnableLibratoMetricsOutput()) { server.initializers().register(new LibratoMetricsInitializer()); }
-        server.initializers().register(new DeflectorThreadsInitializer());
-        server.initializers().register(new AnonymousInformationCollectorInitializer());
-        if (configuration.performRetention() && commandLineArguments.performRetention()) {
-            server.initializers().register(new IndexRetentionInitializer());
-        }
-        if (commandLineArguments.isStats()) { server.initializers().register(new StatisticsPrinterInitializer()); }
-        server.initializers().register(new MasterCacheWorkersInitializer());
+        server.initializers().register(new PeriodicalsInitializer());
 
         // Register message filters. (Order is important here)
         server.registerFilter(new StaticFieldFilter());
@@ -268,14 +280,15 @@ public class ServerDaemon implements Daemon {
         server.registerFilter(new RewriteFilter());
 
         // Register outputs.
-        server.outputs().register(new ElasticSearchOutput(server));
+        server.outputs().register(new BatchedElasticSearchOutput(server));
 
+        
+        // initialize the components
+        server.initializeComponents();
+        
         // Set running
-        server.setRunning(true);
         executorService.execute(server);
-
-        server.startRestApi();
-
+        
         server.getActivityWriter().write(new Activity("Started up.", Main.class));
         LOG.info("Graylog2 up and running.");
 
@@ -285,7 +298,7 @@ public class ServerDaemon implements Daemon {
     public void stop() {
         if (server != null) {
             LOG.info("Graylog2 {} exiting.", Core.GRAYLOG2_VERSION);
-            server.setRunning(false);
+            server.setOverallProcessing(false);
             executorService.shutdown();
         }
     }

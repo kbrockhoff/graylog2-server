@@ -20,23 +20,21 @@
 
 package org.graylog2.buffers.processors;
 
-import java.util.List;
-import java.util.Map;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.LinkedBlockingQueue;
-import java.util.concurrent.ThreadPoolExecutor;
-import java.util.concurrent.TimeUnit;
-
 import com.codahale.metrics.Histogram;
 import com.codahale.metrics.Meter;
-import org.bson.types.ObjectId;
+import com.codahale.metrics.Timer;
+import com.google.common.base.Joiner;
+import com.google.common.collect.Lists;
 import com.google.common.collect.Maps;
+import com.google.common.collect.Ordering;
+import com.google.common.util.concurrent.ThreadFactoryBuilder;
+import com.lmax.disruptor.EventHandler;
+import org.bson.types.ObjectId;
 import org.graylog2.Core;
-import org.graylog2.plugin.buffers.MessageEvent;
 import org.graylog2.outputs.OutputRouter;
 import org.graylog2.outputs.OutputStreamConfigurationImpl;
 import org.graylog2.plugin.Message;
+import org.graylog2.plugin.buffers.MessageEvent;
 import org.graylog2.plugin.outputs.MessageOutput;
 import org.graylog2.plugin.outputs.OutputStreamConfiguration;
 import org.graylog2.plugin.streams.Stream;
@@ -44,9 +42,9 @@ import org.graylog2.streams.StreamImpl;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import com.google.common.collect.Lists;
-import com.google.common.util.concurrent.ThreadFactoryBuilder;
-import com.lmax.disruptor.EventHandler;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.*;
 
 import static com.codahale.metrics.MetricRegistry.name;
 
@@ -58,22 +56,20 @@ public class OutputBufferProcessor implements EventHandler<MessageEvent> {
     private static final Logger LOG = LoggerFactory.getLogger(OutputBufferProcessor.class);
 
     private final ExecutorService executor;
-    
+
     private Core server;
 
-    private List<Message> buffer = Lists.newArrayList();
-
     private final Meter incomingMessages;
-    private final Histogram batchSize;
+    private final Timer processTime;
 
     private final long ordinal;
     private final long numberOfConsumers;
-    
+
     public OutputBufferProcessor(Core server, final long ordinal, final long numberOfConsumers) {
         this.ordinal = ordinal;
         this.numberOfConsumers = numberOfConsumers;
         this.server = server;
-        
+
         executor = new ThreadPoolExecutor(
             server.getConfiguration().getOutputBufferProcessorThreadsCorePoolSize(),
             server.getConfiguration().getOutputBufferProcessorThreadsMaxPoolSize(),
@@ -84,7 +80,7 @@ public class OutputBufferProcessor implements EventHandler<MessageEvent> {
             .build());
 
         incomingMessages = server.metrics().meter(name(OutputBufferProcessor.class, "incomingMessages"));
-        batchSize = server.metrics().histogram(name(OutputBufferProcessor.class, "batchSize"));
+        processTime = server.metrics().timer(name(OutputBufferProcessor.class, "processTime"));
     }
 
     @Override
@@ -100,60 +96,56 @@ public class OutputBufferProcessor implements EventHandler<MessageEvent> {
         Message msg = event.getMessage();
         LOG.debug("Processing message <{}> from OutputBuffer.", msg.getId());
 
-        buffer.add(msg);
+        final List<Message> msgBuffer = Lists.newArrayList();
+        msgBuffer.add(msg);
 
-        if (endOfBatch || buffer.size() >= server.getConfiguration().getOutputBatchSize()) {
+        final CountDownLatch doneSignal = new CountDownLatch(server.outputs().count());
+        for (final MessageOutput output : server.outputs().get()) {
+            final String typeClass = output.getClass().getCanonicalName();
 
-            final CountDownLatch doneSignal = new CountDownLatch(server.outputs().count());
-            for (final MessageOutput output : server.outputs().get()) {
-                final String typeClass = output.getClass().getCanonicalName();
-
-                try {
-                    // We must copy the buffer for this output, because it may be cleared before all messages are handled.
-                    final List<Message> myBuffer = Lists.newArrayList(buffer);
-
-                    LOG.debug("Writing message batch to [{}]. Size <{}>", output.getName(), buffer.size());
-
-                    batchSize.update(buffer.size());
-
-                    executor.submit(new Runnable() {
-                        @Override
-                        public void run() {
-                            try {
-                                output.write(
-                                        OutputRouter.getMessagesForOutput(myBuffer, typeClass),
-                                        buildStreamConfigs(myBuffer, typeClass),
-                                        server
-                                );
-                            } catch (Exception e) {
-                                LOG.error("Error in output [" + output.getName() +"].", e);
-                            } finally {
-                                doneSignal.countDown();
-                            }
-                        }
-                    });
-
-                } catch (Exception e) {
-                    LOG.error("Could not write message batch to output [" + output.getName() +"].", e);
-                    doneSignal.countDown();
+            try {
+                LOG.debug("Writing message batch to [{}]. Size <{}>", output.getName(), msgBuffer.size());
+                if (LOG.isTraceEnabled()) {
+                    final List<String> sortedIds = Ordering.natural().sortedCopy(Lists.transform(msgBuffer, Message.ID_FUNCTION));
+                    LOG.trace("Message ids in batch of [{}]: <{}>", output.getName(), Joiner.on(", ").join(sortedIds));
                 }
-            }
-            
-            // Wait until all writer threads have finished or timeout is reached.
-            if (!doneSignal.await(10, TimeUnit.SECONDS)) {
-                LOG.warn("Timeout reached. Not waiting any longer for writer threads to complete.");
-            }
+                executor.submit(new Runnable() {
+                    @Override
+                    public void run() {
+                        try(Timer.Context context = processTime.time()) {
+                            output.write(
+                                    OutputRouter.getMessagesForOutput(msgBuffer, typeClass),
+                                    buildStreamConfigs(msgBuffer, typeClass),
+                                    server
+                            );
+                        } catch (Exception e) {
+                            LOG.error("Error in output [" + output.getName() +"].", e);
+                        } finally {
+                            doneSignal.countDown();
+                        }
+                    }
+                });
 
-            int messagesWritten = buffer.size();
-
-            if (server.isStatsMode()) {
-                server.getBenchmarkCounter().add(messagesWritten);
+            } catch (Exception e) {
+                LOG.error("Could not write message batch to output [" + output.getName() +"].", e);
+                doneSignal.countDown();
             }
-
-            server.getThroughputCounter().add(messagesWritten);
-            
-            buffer.clear();
         }
+
+        // Wait until all writer threads have finished or timeout is reached.
+        if (!doneSignal.await(10, TimeUnit.SECONDS)) {
+            LOG.warn("Timeout reached. Not waiting any longer for writer threads to complete.");
+        }
+
+        int messagesWritten = msgBuffer.size();
+
+        if (server.isStatsMode()) {
+            server.getBenchmarkCounter().add(messagesWritten);
+        }
+
+        server.getThroughputCounter().add(messagesWritten);
+
+        msgBuffer.clear();
 
         LOG.debug("Wrote message <{}> to all outputs. Finished handling.", msg.getId());
     }
@@ -161,19 +153,19 @@ public class OutputBufferProcessor implements EventHandler<MessageEvent> {
     private OutputStreamConfiguration buildStreamConfigs(List<Message> messages, String className) {
         OutputStreamConfiguration configs = new OutputStreamConfigurationImpl();
         Map<ObjectId, Stream> distinctStreams = Maps.newHashMap();
-        
+
         for (Message message : messages) {
             for (Stream stream : message.getStreams()) {
-                distinctStreams.put(stream.getId(), stream);
+                distinctStreams.put(new ObjectId(stream.getId()), stream);
             }
         }
-        
+
         for (Map.Entry<ObjectId, Stream> e : distinctStreams.entrySet()) {
             StreamImpl stream = (StreamImpl) e.getValue();
             configs.add(e.getKey(), stream.getOutputConfigurations(className));
         }
-        
+
         return configs;
     }
-    
+
 }

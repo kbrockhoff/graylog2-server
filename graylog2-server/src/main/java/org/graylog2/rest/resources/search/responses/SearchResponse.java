@@ -1,5 +1,5 @@
 /*
- * Copyright 2013 TORCH GmbH
+ * Copyright 2013, 2014 TORCH GmbH
  *
  * This file is part of Graylog2.
  *
@@ -33,4 +33,7 @@ public class SearchResponse {
     public Set<String> fields;
     public long time;
     public long totalResults;
+
+    public QueryParseError error;
+    public GenericError genericError;
 }

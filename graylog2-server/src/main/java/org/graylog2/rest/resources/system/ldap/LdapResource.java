@@ -24,6 +24,8 @@ import org.apache.directory.api.ldap.model.cursor.CursorException;
 import org.apache.directory.api.ldap.model.exception.LdapException;
 import org.apache.directory.ldap.client.api.LdapConnectionConfig;
 import org.apache.directory.ldap.client.api.LdapNetworkConnection;
+import org.apache.shiro.authz.annotation.RequiresAuthentication;
+import org.apache.shiro.authz.annotation.RequiresPermissions;
 import org.graylog2.database.ValidationException;
 import org.graylog2.rest.documentation.annotations.Api;
 import org.graylog2.rest.documentation.annotations.ApiOperation;
@@ -32,25 +34,26 @@ import org.graylog2.rest.resources.RestResource;
 import org.graylog2.rest.resources.system.ldap.requests.LdapSettingsRequest;
 import org.graylog2.rest.resources.system.ldap.requests.LdapTestConfigRequest;
 import org.graylog2.rest.resources.system.ldap.responses.LdapTestConfigResponse;
+import org.graylog2.security.RestPermissions;
+import org.graylog2.security.TrustAllX509TrustManager;
 import org.graylog2.security.ldap.LdapConnector;
 import org.graylog2.security.ldap.LdapEntry;
 import org.graylog2.security.ldap.LdapSettings;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import javax.net.ssl.X509TrustManager;
 import javax.ws.rs.*;
 import javax.ws.rs.core.MediaType;
 import javax.ws.rs.core.Response;
 import java.io.IOException;
 import java.net.URI;
-import java.security.cert.CertificateException;
-import java.security.cert.X509Certificate;
 import java.util.Map;
 
 import static javax.ws.rs.core.Response.noContent;
 import static javax.ws.rs.core.Response.ok;
 
+@RequiresAuthentication
+@RequiresPermissions(RestPermissions.LDAP_EDIT) // TODO even viewing the settings needs this permission, because it contains a password
 @Api(value = "System/LDAP", description = "LDAP settings")
 @Path("/system/ldap")
 public class LdapResource extends RestResource {
@@ -77,6 +80,8 @@ public class LdapResource extends RestResource {
         result.put("display_name_attribute", ldapSettings.getDisplayNameAttribute());
         result.put("active_directory", ldapSettings.isActiveDirectory());
         result.put("use_start_tls", ldapSettings.isUseStartTls());
+        result.put("trust_all_certificates", ldapSettings.isTrustAllCertificates());
+        result.put("default_group", ldapSettings.getDefaultGroup());
 
         return ok(json(result)).build();
     }
@@ -99,71 +104,69 @@ public class LdapResource extends RestResource {
         config.setLdapPort(ldapUri.getPort());
         config.setUseSsl(ldapUri.getScheme().startsWith("ldaps"));
         config.setUseTls(request.useStartTls);
-        // TODO this accepts every and all certificates, which is certainly wrong!
-        config.setTrustManagers(new X509TrustManager() {
-            @Override
-            public void checkClientTrusted(X509Certificate[] x509Certificates, String s) throws CertificateException {
-            }
-
-            @Override
-            public void checkServerTrusted(X509Certificate[] x509Certificates, String s) throws CertificateException {
-            }
-
-            @Override
-            public X509Certificate[] getAcceptedIssuers() {
-                return new X509Certificate[0];
-            }
-        });
+        if (request.trustAllCertificates) {
+            config.setTrustManagers(new TrustAllX509TrustManager());
+        }
         if (request.systemUsername != null && !request.systemUsername.isEmpty()) {
             config.setName(request.systemUsername);
             config.setCredentials(request.systemPassword);
         }
 
-        final LdapNetworkConnection connection;
+        LdapNetworkConnection connection = null;
         try {
-            connection = ldapConnector.connect(config);
-        } catch (LdapException e) {
-            response.exception = e.getMessage();
-            response.connected = false;
-            response.systemAuthenticated = false;
-            return response;
-        }
-        response.connected = connection.isConnected();
-        response.systemAuthenticated = connection.isAuthenticated();
-
-        // the web interface allows testing the connection only, in that case we can bail out early.
-        if (request.testConnectOnly) {
-            return response;
-        }
-
-        String userPrincipalName = null;
-        try {
-            final LdapEntry entry = ldapConnector.search(
-                    connection,
-                    request.searchBase,
-                    request.searchPattern,
-                    request.principal,
-                    request.activeDirectory);
-            if (entry != null) {
-                userPrincipalName = entry.getDn();
-                response.entry = entry.getAttributes();
+            try {
+                connection = ldapConnector.connect(config);
+            } catch (LdapException e) {
+                response.exception = e.getMessage();
+                response.connected = false;
+                response.systemAuthenticated = false;
+                return response;
             }
-        } catch (LdapException e) {
-            response.entry = null;
-            response.exception = e.getMessage();
-        } catch (CursorException e) {
-            response.entry = null;
-            response.exception = e.getMessage();
-        }
-        try {
-            response.loginAuthenticated = ldapConnector.authenticate(connection,
-                                                                     userPrincipalName, request.password);
-        } catch (Exception e) {
-            response.loginAuthenticated = false;
-            response.exception = e.getMessage();
-        }
+            response.connected = connection.isConnected();
+            response.systemAuthenticated = connection.isAuthenticated();
 
-        return response;
+            // the web interface allows testing the connection only, in that case we can bail out early.
+            if (request.testConnectOnly) {
+                return response;
+            }
+
+            String userPrincipalName = null;
+            try {
+                final LdapEntry entry = ldapConnector.search(
+                        connection,
+                        request.searchBase,
+                        request.searchPattern,
+                        request.principal,
+                        request.activeDirectory);
+                if (entry != null) {
+                    userPrincipalName = entry.getDn();
+                    response.entry = entry.getAttributes();
+                }
+            } catch (LdapException e) {
+                response.entry = null;
+                response.exception = e.getMessage();
+            } catch (CursorException e) {
+                response.entry = null;
+                response.exception = e.getMessage();
+            }
+            try {
+                response.loginAuthenticated = ldapConnector.authenticate(connection,
+                                                                         userPrincipalName, request.password);
+            } catch (Exception e) {
+                response.loginAuthenticated = false;
+                response.exception = e.getMessage();
+            }
+
+            return response;
+        } finally {
+            if (connection != null) {
+                try {
+                    connection.close();
+                } catch (IOException e) {
+                    log.warn("Unable to close LDAP connection.", e);
+                }
+            }
+        }
     }
 
     @PUT
@@ -188,11 +191,13 @@ public class LdapResource extends RestResource {
         ldapSettings.setSystemPassword(request.systemPassword);
         ldapSettings.setUri(request.ldapUri);
         ldapSettings.setUseStartTls(request.useStartTls);
+        ldapSettings.setTrustAllCertificates(request.trustAllCertificates);
         ldapSettings.setActiveDirectory(request.activeDirectory);
         ldapSettings.setSearchPattern(request.searchPattern);
         ldapSettings.setSearchBase(request.searchBase);
         ldapSettings.setEnabled(request.enabled);
         ldapSettings.setDisplayNameAttribute(request.displayNameAttribute);
+        ldapSettings.setDefaultGroup(request.defaultGroup);
 
         try {
             ldapSettings.save();
@@ -211,6 +216,8 @@ public class LdapResource extends RestResource {
     @Path("/settings")
     public Response deleteLdapSettings() {
         LdapSettings.delete(core);
+        core.getLdapAuthenticator().applySettings(null);
         return noContent().build();
     }
+
 }

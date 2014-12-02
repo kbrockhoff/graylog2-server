@@ -31,6 +31,7 @@ import org.graylog2.database.validators.FilledStringValidator;
 import org.graylog2.database.validators.ListValidator;
 import org.graylog2.database.validators.OptionalStringValidator;
 import org.graylog2.database.validators.Validator;
+import org.graylog2.security.RestPermissions;
 import org.graylog2.security.ldap.LdapEntry;
 import org.graylog2.security.ldap.LdapSettings;
 import org.joda.time.DateTimeZone;
@@ -40,6 +41,7 @@ import org.slf4j.LoggerFactory;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 
 import static com.google.common.base.Objects.firstNonNull;
 
@@ -59,6 +61,7 @@ public class User extends Persisted {
     public static final String PERMISSIONS = "permissions";
     public static final String TIMEZONE = "timezone";
     public static final String EXTERNAL_USER = "external_user";
+    public static final String SESSION_TIMEOUT = "session_timeout_ms";
 
     public User(Map<String, Object> fields, Core core) {
         super(core, fields);
@@ -85,6 +88,7 @@ public class User extends Persisted {
         if (result.size() == 0) { return null; }
 
         if (result.size() > 1) {
+            LOG.error("There was more than one matching user. This should never happen.");
             throw new RuntimeException("There was more than one matching user. This should never happen.");
         }
         final DBObject userObject = result.get(0);
@@ -106,20 +110,6 @@ public class User extends Persisted {
         return users;
     }
 
-    // TODO remove this and use a proper salted digest, this is not secure at all
-    @Deprecated
-    public static String saltPass(String password, String salt) {
-        if (password == null || password.isEmpty()) {
-            throw new RuntimeException("No password given.");
-        }
-
-        if (salt == null || salt.isEmpty()) {
-            throw new RuntimeException("No salt given.");
-        }
-
-        return password + salt;
-    }
-
     public boolean isReadOnly() {
         return false;
     }
@@ -127,11 +117,6 @@ public class User extends Persisted {
     @Override
     public String getCollectionName() {
         return COLLECTION;
-    }
-
-    @Override
-    public ObjectId getId() {
-        return this.id;
     }
 
     protected Map<String, Validator> getValidations() {
@@ -171,6 +156,30 @@ public class User extends Persisted {
         return (List<String>) o;
     }
 
+    public Map<String, String> getStartpage() {
+        Map<String, String> startpage = Maps.newHashMap();
+
+        if (fields.containsKey("startpage")) {
+            Map<String, String>  obj = (Map<String, String>) fields.get("startpage");
+            startpage.put("type", obj.get("type"));
+            startpage.put("id", obj.get("id"));
+        }
+
+        return startpage;
+    }
+
+    public long getSessionTimeoutMs() {
+        final Object o = fields.get(SESSION_TIMEOUT);
+        if (o != null && o instanceof Long) {
+            return (Long) o;
+        }
+        return TimeUnit.HOURS.toMillis(8);
+    }
+
+    public void setSessionTimeoutMs(long timeoutValue) {
+        fields.put(SESSION_TIMEOUT, timeoutValue);
+    }
+
     public void setPermissions(List<String> permissions) {
         fields.put(PERMISSIONS, permissions);
     }
@@ -204,7 +213,7 @@ public class User extends Persisted {
     }
 
     public void setTimeZone(DateTimeZone timeZone) {
-        fields.put(TIMEZONE, timeZone.getID());
+        fields.put(TIMEZONE, timeZone == null ? null : timeZone.getID());
     }
 
     public boolean isExternalUser() {
@@ -215,8 +224,19 @@ public class User extends Persisted {
         fields.put(EXTERNAL_USER, external);
     }
 
+    public void setStartpage(String type, String id) {
+        Map<String, String> startpage = Maps.newHashMap();
+
+        if (type != null && id != null) {
+            startpage.put("type", type);
+            startpage.put("id", id);
+        }
+
+        this.fields.put("startpage", startpage);
+    }
+
     public static User syncFromLdapEntry(Core core, LdapEntry userEntry, LdapSettings ldapSettings, String username) {
-        User user = load(userEntry.getDn(), core);
+        User user = load(username, core);
         // create new user object if necessary
         if (user == null) {
             Map<String, Object> fields = Maps.newHashMap();
@@ -240,12 +260,27 @@ public class User extends Persisted {
         setName(username);
         setExternal(true);
         setEmail(userEntry.getEmail());
-        setPermissions(Lists.<String>newArrayList("*")); // TODO use group mapper to find actual groups
+
+        // only touch the permissions if none existed for this account before
+        // i.e. only determine the new permissions for an account on initially importing it.
+        if (getPermissions() == null) {
+            if (ldapSettings.getDefaultGroup().equals("reader")) {
+                setPermissions(Lists.newArrayList(RestPermissions.readerPermissions(username)));
+
+            } else {
+                setPermissions(Lists.<String>newArrayList("*"));
+            }
+        }
     }
 
     public static class LocalAdminUser extends User {
         public LocalAdminUser(Core core) {
             super(null, Maps.<String, Object>newHashMap(), core);
+        }
+
+        @Override
+        public String getId() {
+            return "local:admin";
         }
 
         @Override
@@ -275,6 +310,11 @@ public class User extends Persisted {
         @Override
         public List<String> getPermissions() {
             return Lists.newArrayList("*");
+        }
+
+        @Override
+        public long getSessionTimeoutMs() {
+            return TimeUnit.HOURS.toMillis(8);
         }
 
         @Override

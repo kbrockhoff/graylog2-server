@@ -26,6 +26,7 @@ import com.mongodb.DBObject;
 import org.bson.types.ObjectId;
 import org.graylog2.Core;
 import org.graylog2.dashboards.widgets.DashboardWidget;
+import org.graylog2.dashboards.widgets.InvalidWidgetConfigurationException;
 import org.graylog2.database.NotFoundException;
 import org.graylog2.database.Persisted;
 import org.graylog2.database.ValidationException;
@@ -34,6 +35,7 @@ import org.graylog2.database.validators.FilledStringValidator;
 import org.graylog2.database.validators.Validator;
 import org.graylog2.indexer.searches.timeranges.InvalidRangeParametersException;
 import org.graylog2.plugin.Tools;
+import org.graylog2.rest.resources.dashboards.requests.WidgetPositionRequest;
 import org.joda.time.DateTime;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -98,6 +100,9 @@ public class Dashboard extends Persisted {
                     } catch (InvalidRangeParametersException e) {
                         LOG.error("Invalid range parameters of widget in dashboard: [{}]", dashboard.getId(), e);
                         continue;
+                    } catch (InvalidWidgetConfigurationException e) {
+                        LOG.error("Invalid configuration of widget in dashboard: [{}]", dashboard.getId(), e);
+                        continue;
                     }
                     dashboard.addPersistedWidget(widget);
                 }
@@ -110,8 +115,32 @@ public class Dashboard extends Persisted {
         return dashboards;
     }
 
+    public void setTitle(String title) {
+        this.fields.put("title", title);
+    }
+
+    public void setDescription(String description) {
+        this.fields.put("description", description);
+    }
+
     public void addPersistedWidget(DashboardWidget widget) {
         widgets.put(widget.getId(), widget);
+    }
+
+    public void updateWidgetPositions(List<WidgetPositionRequest> positions) throws ValidationException {
+        Map<String, Map<String, Object>> map = Maps.newHashMap();
+
+        for (WidgetPositionRequest position : positions) {
+            Map<String, Object> x = Maps.newHashMap();
+            x.put("col", position.col);
+            x.put("row", position.row);
+
+            map.put(position.id, x);
+        }
+
+        fields.put("positions", map);
+
+        save();
     }
 
     public void addWidget(DashboardWidget widget) throws ValidationException {
@@ -169,6 +198,10 @@ public class Dashboard extends Persisted {
 
         if (!result.containsKey("widgets")) {
             result.put("widgets", Lists.newArrayList());
+        }
+
+        if (!result.containsKey("positions")) {
+            result.put("positions", Lists.newArrayList());
         }
 
         return result;

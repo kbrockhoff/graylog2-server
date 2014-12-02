@@ -22,26 +22,26 @@ import com.google.common.collect.Lists;
 import org.graylog2.ConfigurationException;
 import org.graylog2.GraylogServerStub;
 import org.graylog2.plugin.Message;
+import org.graylog2.plugin.Tools;
 import org.graylog2.plugin.inputs.Converter;
 import org.graylog2.plugin.inputs.Extractor;
-import org.joda.time.DateTime;
-import org.junit.Test;
+import org.testng.annotations.Test;
 
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-import static org.junit.Assert.assertEquals;
+import static org.testng.AssertJUnit.assertEquals;
 
 public class CopyInputExtractorTest {
 
     @Test
     public void testCopy() throws Extractor.ReservedFieldException, ConfigurationException {
-        Message msg = new Message("The short message", "TestUnit", new DateTime());
+        Message msg = new Message("The short message", "TestUnit", Tools.iso8601());
 
         msg.addField("somefield", "foo");
 
-        CopyInputExtractor x = new CopyInputExtractor("bar", "bar", Extractor.CursorStrategy.COPY, "somefield", "our_result", noConfig(), "foo", noConverters(), Extractor.ConditionType.NONE, null);
+        CopyInputExtractor x = new CopyInputExtractor("bar", "bar", 0, Extractor.CursorStrategy.COPY, "somefield", "our_result", noConfig(), "foo", noConverters(), Extractor.ConditionType.NONE, null);
         x.runExtractor(new GraylogServerStub(), msg);
 
         assertEquals("foo", msg.getField("our_result"));

@@ -52,6 +52,8 @@ import java.util.Map;
 
 import static javax.ws.rs.core.Response.Status.*;
 import static javax.ws.rs.core.Response.*;
+import static org.graylog2.security.RestPermissions.USERS_EDIT;
+import static org.graylog2.security.RestPermissions.USERS_PERMISSIONSEDIT;
 
 /**
  * @author Lennart Koopmann <lennart@torch.sh>
@@ -78,7 +80,7 @@ public class UsersResource extends RestResource {
             return status(NOT_FOUND).build();
         }
         // if the requested username does not match the authenticated user, then we don't return permission information
-        final boolean allowedToSeePermissions = getSubject().isPermitted(RestPermissions.USERS_PERMISSIONSEDIT);
+        final boolean allowedToSeePermissions = isPermitted(RestPermissions.USERS_PERMISSIONSEDIT, username);
         final boolean permissionsAllowed = getSubject().getPrincipal().toString().equals(username) || allowedToSeePermissions;
 
         return ok().entity(json(toMap(user, permissionsAllowed))).build();
@@ -124,6 +126,9 @@ public class UsersResource extends RestResource {
         if (cr.timezone != null) {
             userData.put(User.TIMEZONE, cr.timezone);
         }
+        if (cr.session_timeout_ms != null) {
+            userData.put(User.SESSION_TIMEOUT, cr.session_timeout_ms);
+        }
         User user = new User(userData, core);
         ObjectId id;
         try {
@@ -142,7 +147,6 @@ public class UsersResource extends RestResource {
 
     @PUT
     @Path("{username}")
-    @RequiresPermissions(RestPermissions.USERS_EDIT)
     @ApiOperation("Modify user details.")
     @ApiResponses({
             @ApiResponse(code = 400, message = "Attempted to modify a read only user account (e.g. built-in or LDAP users)."),
@@ -152,7 +156,7 @@ public class UsersResource extends RestResource {
         if (body == null || body.isEmpty()) {
             throw new BadRequestException("Missing request body.");
         }
-
+        checkPermission(USERS_EDIT, username);
         CreateRequest cr = getCreateRequest(body);
 
         final User user = User.load(username, core);
@@ -169,15 +173,31 @@ public class UsersResource extends RestResource {
         if (cr.fullname != null) {
             user.setFullName(cr.fullname);
         }
-        if (cr.permissions != null) {
+        final boolean permitted = isPermitted(USERS_PERMISSIONSEDIT, user.getName());
+        if (permitted && cr.permissions != null) {
             user.setPermissions(cr.permissions);
         }
-        if (cr.timezone != null) {
+        if (cr.timezone == null) {
+            user.setTimeZone(null);
+        } else {
             try {
-                final DateTimeZone tz = DateTimeZone.forID(cr.timezone);
-                user.setTimeZone(tz);
+                if (cr.timezone.isEmpty()) {
+                    user.setTimeZone(null);
+                } else {
+                    final DateTimeZone tz = DateTimeZone.forID(cr.timezone);
+                    user.setTimeZone(tz);
+                }
             } catch (IllegalArgumentException e) {
-                LOG.error("Invalid timezone {}, discarding it for user {}.", cr.timezone, username);
+                LOG.error("Invalid timezone '{}', ignoring it for user {}.", cr.timezone, username);
+            }
+        }
+
+        if (cr.startpage != null) {
+            user.setStartpage(cr.startpage.type, cr.startpage.id);
+        }
+        if (isPermitted("*")) {
+            if (cr.session_timeout_ms != null && cr.session_timeout_ms != 0) {
+                user.setSessionTimeoutMs(cr.session_timeout_ms);
             }
         }
         try {
@@ -193,7 +213,7 @@ public class UsersResource extends RestResource {
 
     @DELETE
     @Path("{username}")
-    @RequiresPermissions(RestPermissions.USERS_EDIT)
+    @RequiresPermissions(USERS_EDIT)
     @ApiOperation("Removes a user account.")
     @ApiResponses({@ApiResponse(code = 400, message = "When attempting to remove a read only user (e.g. built-in or LDAP user).")})
     public Response deleteUser(@ApiParam(title = "username", description = "The name of the user to delete.", required = true) @PathParam("username") String username) {
@@ -399,7 +419,7 @@ public class UsersResource extends RestResource {
 
     private HashMap<String, Object> toMap(User user, boolean includePermissions) {
         final HashMap<String,Object> map = Maps.newHashMap();
-        map.put("id", Objects.firstNonNull(user.getId(), "").toString());
+        map.put("id", Objects.firstNonNull(user.getId(), ""));
         map.put("username", user.getName());
         map.put("email", user.getEmail());
         map.put("full_name", user.getFullName());
@@ -409,8 +429,11 @@ public class UsersResource extends RestResource {
         if (user.getTimeZone() != null) {
             map.put("timezone", user.getTimeZone().getID());
         }
+        map.put("session_timeout_ms", user.getSessionTimeoutMs());
         map.put("read_only", user.isReadOnly());
         map.put("external", user.isExternalUser());
+        map.put("startpage", user.getStartpage());
+
         return map;
     }
 

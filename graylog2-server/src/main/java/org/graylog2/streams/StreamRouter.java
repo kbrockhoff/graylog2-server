@@ -26,24 +26,22 @@ import com.codahale.metrics.Timer;
 import com.google.common.cache.CacheBuilder;
 import com.google.common.cache.CacheLoader;
 import com.google.common.cache.LoadingCache;
+import com.google.common.collect.Lists;
 import com.google.common.collect.Maps;
-import org.bson.types.ObjectId;
+import org.graylog2.Core;
 import org.graylog2.database.NotFoundException;
 import org.graylog2.plugin.GraylogServer;
+import org.graylog2.plugin.Message;
+import org.graylog2.plugin.streams.Stream;
+import org.graylog2.plugin.streams.StreamRule;
+import org.graylog2.streams.matchers.StreamRuleMatcher;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.graylog2.streams.matchers.StreamRuleMatcher;
 
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
-
-import com.google.common.collect.Lists;
-import org.graylog2.Core;
-import org.graylog2.plugin.Message;
-import org.graylog2.plugin.streams.Stream;
-import org.graylog2.plugin.streams.StreamRule;
 
 /**
  * Routes a GELF Message to it's streams.
@@ -54,15 +52,16 @@ public class StreamRouter {
 
     private static final Logger LOG = LoggerFactory.getLogger(StreamRouter.class);
     private static LoadingCache<String, List<Stream>> cachedStreams;
-    private static LoadingCache<ObjectId, List<StreamRule>> cachedStreamRules;
+    private static LoadingCache<String, List<StreamRule>> cachedStreamRules;
 
     private final Map<String, Meter> streamIncomingMeters = Maps.newHashMap();
     private final Map<String, Timer> streamExecutionTimers = Maps.newHashMap();
+    private final Map<String, Meter> streamExceptionMeters = Maps.newHashMap();
 
     private Boolean useCaching = false;
 
     public StreamRouter() {
-        this(false);
+        this(true);
     }
 
     public StreamRouter(Boolean useCaching) {
@@ -74,7 +73,7 @@ public class StreamRouter {
         List<Stream> streams = getStreams(server);
 
         for (Stream stream : streams) {
-            Timer timer = getExecutionTimer(stream.getId().toStringMongod(), server);
+            Timer timer = getExecutionTimer(stream.getId(), server);
             final Timer.Context timerContext = timer.time();
 
             Map<StreamRule, Boolean> result = getRuleMatches(server, stream, msg);
@@ -83,7 +82,7 @@ public class StreamRouter {
 
             // All rules were matched.
             if (matched) {
-                getIncomingMeter(stream.getId().toStringMongod(), server).mark();
+                getIncomingMeter(stream.getId(), server).mark();
                 matches.add(stream);
             }
             timerContext.close();
@@ -118,15 +117,15 @@ public class StreamRouter {
         }
     }
 
-    private List<StreamRule> getStreamRules(ObjectId streamId, final Core server) {
+    private List<StreamRule> getStreamRules(String streamId, final Core server) {
         if (this.useCaching) {
             if (cachedStreamRules == null)
                 cachedStreamRules = CacheBuilder.newBuilder()
                         .expireAfterWrite(1, TimeUnit.SECONDS)
                         .build(
-                                new CacheLoader<ObjectId, List<StreamRule>>() {
+                                new CacheLoader<String, List<StreamRule>>() {
                                     @Override
-                                    public List<StreamRule> load(ObjectId s) throws Exception {
+                                    public List<StreamRule> load(String s) throws Exception {
                                         return StreamRuleImpl.findAllForStream(s, server);
                                     }
                                 }
@@ -157,7 +156,7 @@ public class StreamRouter {
         for (StreamRule rule : streamRules) {
             try {
                 StreamRuleMatcher matcher = StreamRuleMatcherFactory.build(rule.getType());
-                result.put(rule, matchStreamRule(msg, matcher, rule));
+                result.put(rule, matchStreamRule(msg, matcher, rule, server));
             } catch (InvalidStreamRuleTypeException e) {
                 LOG.warn("Invalid stream rule type. Skipping matching for this rule. " + e.getMessage(), e);
             }
@@ -170,11 +169,12 @@ public class StreamRouter {
         return !ruleMatches.isEmpty() && !ruleMatches.values().contains(false);
     }
 
-    public boolean matchStreamRule(Message msg, StreamRuleMatcher matcher, StreamRule rule) {
+    public boolean matchStreamRule(Message msg, StreamRuleMatcher matcher, StreamRule rule, Core server) {
         try {
             return matcher.match(msg, rule);
         } catch (Exception e) {
-            LOG.warn("Could not match stream rule <" + rule.getType() + "/" + rule.getValue() + ">: " + e.getMessage(), e);
+            LOG.debug("Could not match stream rule <" + rule.getType() + "/" + rule.getValue() + ">: " + e.getMessage(), e);
+            getExceptionMeter(rule.getStreamId(), server).mark();
             return false;
         }
     }
@@ -197,6 +197,16 @@ public class StreamRouter {
         }
 
         return timer;
+    }
+
+    protected Meter getExceptionMeter(String streamId, GraylogServer server) {
+        Meter meter = this.streamExceptionMeters.get(streamId);
+        if (meter == null) {
+            meter = server.metrics().meter(MetricRegistry.name(Stream.class, streamId, "matchingExceptions"));
+            this.streamExceptionMeters.put(streamId, meter);
+        }
+
+        return meter;
     }
 
 }

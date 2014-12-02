@@ -54,11 +54,13 @@ public class GELFUDPInput extends GELFInputBase {
 
         final ExecutorService workerThreadPool = Executors.newCachedThreadPool(
                 new ThreadFactoryBuilder()
-                        .setNameFormat("input-" + inputId + "-gelfudp-worker-%d")
+                        .setNameFormat("input-" + getId() + "-gelfudp-worker-%d")
                         .build());
 
         bootstrap = new ConnectionlessBootstrap(new NioDatagramChannelFactory(workerThreadPool));
+        bootstrap.setOption("receiveBufferSizePredictorFactory", new FixedReceiveBufferSizePredictorFactory(8192));
         bootstrap.setPipelineFactory(new GELFUDPPipelineFactory(graylogServer, this, throughputCounter));
+        bootstrap.setOption("receiveBufferSize", getRecvBufferSize());
 
         try {
             channel = ((ConnectionlessBootstrap) bootstrap).bind(socketAddress);

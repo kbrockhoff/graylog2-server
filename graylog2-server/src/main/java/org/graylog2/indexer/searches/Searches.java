@@ -25,6 +25,8 @@ import org.elasticsearch.action.search.SearchRequestBuilder;
 import org.elasticsearch.action.search.SearchResponse;
 import org.elasticsearch.action.search.SearchType;
 import org.elasticsearch.client.Client;
+import org.elasticsearch.common.unit.TimeValue;
+import org.elasticsearch.common.xcontent.XContentHelper;
 import org.elasticsearch.index.query.*;
 import org.elasticsearch.search.SearchHit;
 import org.elasticsearch.search.facet.FacetBuilders;
@@ -40,8 +42,13 @@ import org.graylog2.indexer.IndexHelper;
 import org.graylog2.indexer.Indexer;
 import org.graylog2.indexer.results.*;
 import org.graylog2.indexer.searches.timeranges.TimeRange;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
+import java.io.IOException;
+import java.util.List;
 import java.util.Set;
+import java.util.concurrent.TimeUnit;
 
 import static org.elasticsearch.index.query.QueryBuilders.matchAllQuery;
 import static org.elasticsearch.index.query.QueryBuilders.queryString;
@@ -50,6 +57,7 @@ import static org.elasticsearch.index.query.QueryBuilders.queryString;
  * @author Lennart Koopmann <lennart@socketfeed.com>
  */
 public class Searches {
+    private static final Logger log = LoggerFactory.getLogger(Searches.class);
 
     private final Core server;
 	private final Client c;
@@ -80,14 +88,39 @@ public class Searches {
         request.searchType(SearchType.COUNT);
 
         SearchResponse r = c.search(request).actionGet();
-        return new CountResult(r.getHits().getTotalHits(), r.getTookInMillis());
+        return new CountResult(r.getHits().getTotalHits(), r.getTookInMillis(), r.getHits());
     }
 
-    public SearchResult search(String query, TimeRange range, int limit, int offset) throws IndexHelper.InvalidRangeFormatException {
-        return search(query, null, range, limit, offset);
+    public ScrollResult scroll(String query, TimeRange range, int limit, int offset, List<String> fields, String filter) throws IndexHelper.InvalidRangeFormatException {
+        final Set<String> indices = IndexHelper.determineAffectedIndices(server, range);
+        final SearchRequestBuilder srb = standardSearchRequest(query, indices, limit, offset, range, null, false);
+        if (range != null && filter != null) {
+            srb.setPostFilter(standardFilters(range, filter));
+        }
+
+        // only request the fields we asked for otherwise we can't figure out which fields will be in the result set
+        // until we've scrolled through the entire set.
+        srb.addFields(fields.toArray(new String[fields.size()]));
+        srb.addField("_source"); // always request the _source field because otherwise we can't access non-stored values
+
+        final SearchRequest request = srb.setSearchType(SearchType.SCAN)
+                .setScroll(new TimeValue(1, TimeUnit.MINUTES))
+                .setSize(500).request(); // TODO magic numbers
+        if (log.isDebugEnabled()) {
+            try {
+                log.debug("ElasticSearch scroll query: {}", XContentHelper.convertToJson(request.source(), false));
+            } catch (IOException ignored) {}
+        }
+        final SearchResponse r = c.search(request).actionGet();
+
+        return new ScrollResult(c, query, request.source(), r, fields);
+    }
+
+    public SearchResult search(String query, TimeRange range, int limit, int offset, Sorting sorting) throws IndexHelper.InvalidRangeFormatException {
+        return search(query, null, range, limit, offset, sorting);
 	}
 
-    public SearchResult search(String query, String filter, TimeRange range, int limit, int offset) throws IndexHelper.InvalidRangeFormatException {
+    public SearchResult search(String query, String filter, TimeRange range, int limit, int offset, Sorting sorting) throws IndexHelper.InvalidRangeFormatException {
         if(limit <= 0) {
             limit = LIMIT;
         }
@@ -102,9 +135,9 @@ public class Searches {
                                             limit,
                                             offset,
                                             range,
-                                            SortOrder.DESC).request();
+                                            sorting).request();
         } else {
-            request = filteredSearchRequest(query, filter, indices, limit, offset, range, SortOrder.DESC).request();
+            request = filteredSearchRequest(query, filter, indices, limit, offset, range, sorting).request();
         }
 
         SearchResponse r = c.search(request).actionGet();
@@ -175,11 +208,12 @@ public class Searches {
             request = srb.request();
             r = c.search(request).actionGet();
         }  catch (org.elasticsearch.action.search.SearchPhaseExecutionException e) {
-            throw new FieldTypeException();
+            throw new FieldTypeException(e);
         }
 
         return new FieldStatsResult(
                 (StatisticalFacet) r.getFacets().facet(STATS_FACET_NAME),
+                r.getHits(),
                 query,
                 request.source(),
                 r.getTook()
@@ -220,9 +254,12 @@ public class Searches {
 
         fb.facetFilter(standardFilters(range, filter));
 
+        QueryStringQueryBuilder qs = queryString(query);
+        qs.allowLeadingWildcard(server.getConfiguration().isAllowLeadingWildcardSearches());
+
         SearchRequestBuilder srb = c.prepareSearch();
         srb.setIndices(IndexHelper.determineAffectedIndices(server, range).toArray(new String[]{}));
-        srb.setQuery(queryString(query));
+        srb.setQuery(qs);
         srb.addFacet(fb);
 
         SearchResponse r;
@@ -230,7 +267,7 @@ public class Searches {
         try {
             r = c.search(request).actionGet();
         }  catch (org.elasticsearch.action.search.SearchPhaseExecutionException e) {
-            throw new FieldTypeException();
+            throw new FieldTypeException(e);
         }
 
         return new FieldHistogramResult((DateHistogramFacet) r.getFacets().facet("histogram"), query, request.source(),
@@ -253,14 +290,38 @@ public class Searches {
         return standardSearchRequest(query, indices, 0, 0, range, null);
     }
 
-    private SearchRequestBuilder standardSearchRequest(String query, Set<String> indices, int limit, int offset, TimeRange range, SortOrder sort) throws IndexHelper.InvalidRangeFormatException {
+    private SearchRequestBuilder standardSearchRequest(String query,
+                                                       Set<String> indices,
+                                                       int limit,
+                                                       int offset,
+                                                       TimeRange range,
+                                                       Sorting sort) throws IndexHelper.InvalidRangeFormatException {
+        return standardSearchRequest(query, indices, limit, offset, range, sort, true);
+    }
+
+    private SearchRequestBuilder standardSearchRequest(
+            String query,
+            Set<String> indices,
+            int limit,
+            int offset,
+            TimeRange range,
+            Sorting sort,
+            boolean highlight) throws IndexHelper.InvalidRangeFormatException {
         if (query == null || query.trim().isEmpty()) {
             query = "*";
         }
 
         SearchRequestBuilder srb = c.prepareSearch();
         srb.setIndices(indices.toArray(new String[]{}));
-        srb.setQuery(queryString(query));
+
+        if (query.trim().equals("*")) {
+            srb.setQuery(matchAllQuery());
+        } else {
+            QueryStringQueryBuilder qs = queryString(query);
+            qs.allowLeadingWildcard(server.getConfiguration().isAllowLeadingWildcardSearches());
+            srb.setQuery(qs);
+        }
+
         srb.setFrom(offset);
 
         if (limit > 0) {
@@ -272,7 +333,12 @@ public class Searches {
         }
 
         if (sort != null) {
-            srb.addSort("timestamp", sort);
+            srb.addSort(sort.getField(), sort.asElastic());
+        }
+
+        if (highlight && server.getConfiguration().isAllowHighlighting()) {
+            srb.setHighlighterRequireFieldMatch(false);
+            srb.addHighlightedField("*", 0, 0);
         }
 
         return srb;
@@ -286,7 +352,7 @@ public class Searches {
         return filteredSearchRequest(query, filter, indices, 0, 0, range, null);
     }
 
-    private SearchRequestBuilder filteredSearchRequest(String query, String filter, Set<String> indices, int limit, int offset, TimeRange range, SortOrder sort) throws IndexHelper.InvalidRangeFormatException {
+    private SearchRequestBuilder filteredSearchRequest(String query, String filter, Set<String> indices, int limit, int offset, TimeRange range, Sorting sort) throws IndexHelper.InvalidRangeFormatException {
         SearchRequestBuilder srb = standardSearchRequest(query, indices, limit, offset, range, sort);
 
         if (range != null && filter != null) {
@@ -334,5 +400,10 @@ public class Searches {
     }
 
     public class FieldTypeException extends Exception {
+
+        public FieldTypeException(Throwable e) {
+            super(e);
+        }
+
     }
 }

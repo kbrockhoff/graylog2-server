@@ -20,22 +20,30 @@
 package org.graylog2.rest.resources.search;
 
 import com.codahale.metrics.annotation.Timed;
+import org.apache.shiro.authz.annotation.RequiresAuthentication;
+import org.elasticsearch.action.search.SearchPhaseExecutionException;
+import org.glassfish.jersey.server.ChunkedOutput;
 import org.graylog2.indexer.IndexHelper;
 import org.graylog2.indexer.Indexer;
+import org.graylog2.indexer.results.ScrollResult;
+import org.graylog2.indexer.searches.Sorting;
 import org.graylog2.indexer.searches.timeranges.InvalidRangeParametersException;
 import org.graylog2.indexer.searches.timeranges.KeywordRange;
 import org.graylog2.indexer.searches.timeranges.TimeRange;
 import org.graylog2.rest.documentation.annotations.*;
 import org.graylog2.rest.resources.search.responses.SearchResponse;
+import org.graylog2.security.RestPermissions;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import javax.ws.rs.*;
 import javax.ws.rs.core.MediaType;
+import java.util.List;
 
 /**
  * @author Lennart Koopmann <lennart@torch.sh>
  */
+@RequiresAuthentication
 @Api(value = "Search/Keyword", description = "Message search")
 @Path("/search/universal/keyword")
 public class KeywordSearchResource extends SearchResource {
@@ -45,7 +53,7 @@ public class KeywordSearchResource extends SearchResource {
     @GET @Timed
     @ApiOperation(value = "Message search with keyword as timerange.",
             notes = "Search for messages in a timerange defined by a keyword like \"yesterday\" or \"2 weeks ago to wednesday\".")
-    @Produces({ MediaType.APPLICATION_JSON, "text/csv" })
+    @Produces(MediaType.APPLICATION_JSON)
     @ApiResponses(value = {
             @ApiResponse(code = 400, message = "Invalid keyword provided.")
     })
@@ -54,22 +62,66 @@ public class KeywordSearchResource extends SearchResource {
             @ApiParam(title = "keyword", description = "Range keyword", required = true) @QueryParam("keyword") String keyword,
             @ApiParam(title = "limit", description = "Maximum number of messages to return.", required = false) @QueryParam("limit") int limit,
             @ApiParam(title = "offset", description = "Offset", required = false) @QueryParam("offset") int offset,
-            @ApiParam(title = "filter", description = "Filter", required = false) @QueryParam("filter") String filter) {
+            @ApiParam(title = "filter", description = "Filter", required = false) @QueryParam("filter") String filter,
+            @ApiParam(title = "sort", description = "Sorting (field:asc / field:desc)", required = false) @QueryParam("sort") String sort) {
+        checkSearchPermission(filter, RestPermissions.SEARCHES_KEYWORD);
+
         checkQueryAndKeyword(query, keyword);
+
+        Sorting sorting = buildSorting(sort);
 
         try {
             if (filter == null) {
                 return buildSearchResponse(
-                        core.getIndexer().searches().search(query, buildKeywordTimeRange(keyword), limit, offset)
+                        core.getIndexer().searches().search(query, buildKeywordTimeRange(keyword), limit, offset, sorting)
                 );
             } else {
                 return buildSearchResponse(
-                        core.getIndexer().searches().search(query, filter, buildKeywordTimeRange(keyword), limit, offset)
+                        core.getIndexer().searches().search(query, filter, buildKeywordTimeRange(keyword), limit, offset, sorting)
                 );
             }
         } catch (IndexHelper.InvalidRangeFormatException e) {
             LOG.warn("Invalid timerange parameters provided. Returning HTTP 400.", e);
             throw new WebApplicationException(400);
+        } catch (SearchPhaseExecutionException e) {
+            throw createRequestExceptionForParseFailure(query, e);
+        }
+    }
+
+    @GET @Timed
+    @ApiOperation(value = "Message search with keyword as timerange.",
+                  notes = "Search for messages in a timerange defined by a keyword like \"yesterday\" or \"2 weeks ago to wednesday\".")
+    @Produces("text/csv")
+    @ApiResponses(value = {
+            @ApiResponse(code = 400, message = "Invalid keyword provided.")
+    })
+    public ChunkedOutput<ScrollResult.ScrollChunk> searchKeywordChunked(
+            @ApiParam(title = "query", description = "Query (Lucene syntax)", required = true) @QueryParam("query") String query,
+            @ApiParam(title = "keyword", description = "Range keyword", required = true) @QueryParam("keyword") String keyword,
+            @ApiParam(title = "limit", description = "Maximum number of messages to return.", required = false) @QueryParam("limit") int limit,
+            @ApiParam(title = "offset", description = "Offset", required = false) @QueryParam("offset") int offset,
+            @ApiParam(title = "filter", description = "Filter", required = false) @QueryParam("filter") String filter,
+            @ApiParam(title = "fields", description = "Comma separated list of fields to return", required = true) @QueryParam("fields") String fields) {
+        checkSearchPermission(filter, RestPermissions.SEARCHES_KEYWORD);
+
+        checkQuery(query);
+        final List<String> fieldList = parseFields(fields);
+        final TimeRange timeRange = buildKeywordTimeRange(keyword);
+
+        try {
+            final ScrollResult scroll = core.getIndexer().searches()
+                    .scroll(query, timeRange, limit, offset, fieldList, filter);
+            final ChunkedOutput<ScrollResult.ScrollChunk> output = new ChunkedOutput<>(ScrollResult.ScrollChunk.class);
+
+            LOG.debug("[{}] Scroll result contains a total of {} messages", scroll.getQueryHash(), scroll.totalHits());
+            Runnable scrollIterationAction = createScrollChunkProducer(scroll, output, limit);
+            // TODO use a shared executor for async responses here instead of a single thread that's not limited
+            new Thread(scrollIterationAction).start();
+            return output;
+        } catch (SearchPhaseExecutionException e) {
+            throw createRequestExceptionForParseFailure(query, e);
+        } catch (IndexHelper.InvalidRangeFormatException e) {
+            throw new BadRequestException(e);
         }
     }
 
@@ -85,6 +137,8 @@ public class KeywordSearchResource extends SearchResource {
             @ApiParam(title = "interval", description = "Histogram interval / bucket size. (year, quarter, month, week, day, hour or minute)", required = true) @QueryParam("interval") String interval,
             @ApiParam(title = "keyword", description = "Range keyword", required = true) @QueryParam("keyword") String keyword,
             @ApiParam(title = "filter", description = "Filter", required = false) @QueryParam("filter") String filter) {
+        checkSearchPermission(filter, RestPermissions.SEARCHES_KEYWORD);
+
         checkQueryAndInterval(query, interval);
         interval = interval.toUpperCase();
         validateInterval(interval);
@@ -116,6 +170,8 @@ public class KeywordSearchResource extends SearchResource {
             @ApiParam(title = "size", description = "Maximum number of terms to return", required = false) @QueryParam("size") int size,
             @ApiParam(title = "keyword", description = "Range keyword", required = true) @QueryParam("keyword") String keyword,
             @ApiParam(title = "filter", description = "Filter", required = false) @QueryParam("filter") String filter) {
+        checkSearchPermission(filter, RestPermissions.SEARCHES_KEYWORD);
+
         checkQueryAndField(query, field);
 
         try {
@@ -142,6 +198,8 @@ public class KeywordSearchResource extends SearchResource {
             @ApiParam(title = "query", description = "Query (Lucene syntax)", required = true) @QueryParam("query") String query,
             @ApiParam(title = "keyword", description = "Range keyword", required = true) @QueryParam("keyword") String keyword,
             @ApiParam(title = "filter", description = "Filter", required = false) @QueryParam("filter") String filter) {
+        checkSearchPermission(filter, RestPermissions.SEARCHES_KEYWORD);
+
         checkQueryAndField(query, field);
 
         try {
@@ -168,6 +226,8 @@ public class KeywordSearchResource extends SearchResource {
             @ApiParam(title = "interval", description = "Histogram interval / bucket size. (year, quarter, month, week, day, hour or minute)", required = true) @QueryParam("interval") String interval,
             @ApiParam(title = "keyword", description = "Range keyword", required = true) @QueryParam("keyword") String keyword,
             @ApiParam(title = "filter", description = "Filter", required = false) @QueryParam("filter") String filter) {
+        checkSearchPermission(filter, RestPermissions.SEARCHES_KEYWORD);
+
         checkQueryAndInterval(query, interval);
         interval = interval.toUpperCase();
         validateInterval(interval);

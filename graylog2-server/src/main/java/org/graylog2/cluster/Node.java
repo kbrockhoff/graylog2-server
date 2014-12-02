@@ -23,7 +23,6 @@ import com.google.common.collect.Maps;
 import com.mongodb.BasicDBObject;
 import com.mongodb.DBObject;
 import org.bson.types.ObjectId;
-import org.eclipse.jdt.core.compiler.CharOperation;
 import org.graylog2.Core;
 import org.graylog2.database.Persisted;
 import org.graylog2.database.ValidationException;
@@ -127,6 +126,15 @@ public class Node extends Persisted {
         return nodes;
     }
 
+    public static Map<String, Node> allActive(Core core) {
+        Map<String, Node> nodes = Maps.newHashMap();
+
+        for (Type type : Node.Type.values())
+            nodes.putAll(Node.allActive(core, type));
+
+        return nodes;
+    }
+
     public static void dropOutdated(Core core) {
         BasicDBObject query = new BasicDBObject();
         query.put("last_seen", new BasicDBObject("$lt", Tools.getUTCTimestamp()-PING_TIMEOUT));
@@ -142,6 +150,15 @@ public class Node extends Persisted {
         query.put("is_master", true);
 
         return query(query, COLLECTION).size() == 0;
+    }
+
+    public boolean isAnyMasterPresent() {
+        BasicDBObject query = new BasicDBObject();
+        query.put("type", Type.SERVER.toString());
+        query.put("last_seen", new BasicDBObject("$gte", Tools.getUTCTimestamp()-PING_TIMEOUT));
+        query.put("is_master", true);
+
+        return query(query, COLLECTION).size() > 0;
     }
 
     /**

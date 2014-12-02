@@ -40,7 +40,6 @@ import org.slf4j.LoggerFactory;
 
 import javax.ws.rs.*;
 import javax.ws.rs.core.Response;
-
 import java.io.IOException;
 import java.util.List;
 import java.util.Map;
@@ -50,6 +49,7 @@ import static javax.ws.rs.core.Response.ok;
 /**
  * @author Lennart Koopmann <lennart@torch.sh>
  */
+// @RequiresAuthentication unauthenticated because radios do not have any authentication support yet
 @Api(value = "System/Radios", description = "Management of graylog2-radio nodes.")
 @Path("/system/radios")
 public class RadiosResource extends RestResource {
@@ -192,11 +192,12 @@ public class RadiosResource extends RestResource {
             Map<String, Object> inputSummary = Maps.newHashMap();
 
             inputSummary.put("type", input.getType());
-            inputSummary.put("id", input.getId().toStringMongod());
+            inputSummary.put("id", input.getId());
             inputSummary.put("title", input.getTitle());
             inputSummary.put("configuration", input.getConfiguration());
             inputSummary.put("creator_user_id", input.getCreatorUserId());
             inputSummary.put("created_at", Tools.getISO8601String(input.getCreatedAt()));
+            inputSummary.put("global", input.isGlobal());
 
             inputs.add(inputSummary);
         }

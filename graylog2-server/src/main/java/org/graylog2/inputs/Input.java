@@ -68,7 +68,11 @@ public class Input extends Persisted {
 
     public static List<Input> allOfThisNode(Core core) {
         List<Input> inputs = Lists.newArrayList();
-        for (DBObject o : query(new BasicDBObject("node_id", core.getNodeId()), core, COLLECTION)) {
+        List<BasicDBObject> query = new ArrayList<BasicDBObject>();
+        query.add(new BasicDBObject("node_id", core.getNodeId()));
+        query.add(new BasicDBObject("global", true));
+        List<DBObject> ownInputs = query(new BasicDBObject( "$or", query), core, COLLECTION);
+        for (DBObject o : ownInputs) {
             inputs.add(new Input(core, (ObjectId) o.get("_id"), o.toMap()));
         }
 
@@ -77,7 +81,11 @@ public class Input extends Persisted {
 
     public static List<Input> allOfRadio(Core core, Node radio) {
         List<Input> inputs = Lists.newArrayList();
-        for (DBObject o : query(new BasicDBObject("radio_id", radio.getNodeId()), core, COLLECTION)) {
+        List<BasicDBObject> query = Lists.newArrayList();
+        query.add(new BasicDBObject("radio_id", radio.getNodeId()));
+        query.add(new BasicDBObject("global", true));
+
+        for (DBObject o : query(new BasicDBObject("$or", query), core, COLLECTION)) {
             inputs.add(new Input(core, (ObjectId) o.get("_id"), o.toMap()));
         }
 
@@ -86,6 +94,21 @@ public class Input extends Persisted {
 
     public static Input find(Core core, String id) {
         DBObject o = findOne(new BasicDBObject("_id", new ObjectId(id)), core, COLLECTION);
+        return new Input(core, (ObjectId) o.get("_id"), o.toMap());
+    }
+
+    public static Input findForThisNode(Core core, String id) {
+        List<BasicDBObject> query = new ArrayList<BasicDBObject>();
+        query.add(new BasicDBObject("_id", new ObjectId(id)));
+
+        List<BasicDBObject> forThisNodeOrGlobal = new ArrayList<BasicDBObject>();
+        forThisNodeOrGlobal.add(new BasicDBObject("node_id", core.getNodeId()));
+        forThisNodeOrGlobal.add(new BasicDBObject("global", true));
+
+        query.add(new BasicDBObject("$or", forThisNodeOrGlobal));
+
+        DBObject o = findOne(new BasicDBObject("$and", query), core, COLLECTION);
+
         return new Input(core, (ObjectId) o.get("_id"), o.toMap());
     }
 
@@ -180,10 +203,18 @@ public class Input extends Persisted {
         Iterator<Object> iterator = mEx.iterator();
         while(iterator.hasNext()) {
             DBObject ex = (BasicDBObject) iterator.next();
+
+            // SOFT MIGRATION: does this extractor have an order set? Implemented for issue: #726
+            Long order = new Long(0);
+            if (ex.containsField("order")) {
+                order = (Long) ex.get("order"); // mongodb driver gives us a java.lang.Long
+            }
+
             try {
                 Extractor extractor = ExtractorFactory.factory(
                         (String) ex.get("id"),
                         (String) ex.get("title"),
+                        order.intValue(),
                         Extractor.CursorStrategy.valueOf(((String) ex.get("cursor_strategy")).toUpperCase()),
                         Extractor.Type.valueOf(((String) ex.get("type")).toUpperCase()),
                         (String) ex.get("source_field"),
@@ -262,6 +293,14 @@ public class Input extends Persisted {
         }
 
         return cl;
+    }
+
+    public Boolean isGlobal() {
+        Object global = fields.get("global");
+        if (global != null && global instanceof Boolean)
+            return (Boolean) global;
+        else
+            return false;
     }
 
 }

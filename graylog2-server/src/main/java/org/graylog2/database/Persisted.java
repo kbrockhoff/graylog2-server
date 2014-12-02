@@ -20,25 +20,21 @@
 
 package org.graylog2.database;
 
-import java.util.Date;
-import java.util.List;
-import java.util.Map;
-
+import com.beust.jcommander.internal.Lists;
 import com.google.common.collect.Maps;
+import com.mongodb.*;
 import org.bson.types.ObjectId;
 import org.graylog2.Core;
-
-import com.beust.jcommander.internal.Lists;
-import com.mongodb.BasicDBObject;
-import com.mongodb.DBCollection;
-import com.mongodb.DBCursor;
-import com.mongodb.DBObject;
 import org.graylog2.database.validators.Validator;
 import org.graylog2.plugin.database.EmbeddedPersistable;
 import org.joda.time.DateTime;
 import org.joda.time.DateTimeZone;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import java.util.Date;
+import java.util.List;
+import java.util.Map;
 
 /**
  * @author Lennart Koopmann <lennart@torch.sh>
@@ -95,6 +91,10 @@ public abstract class Persisted {
                         .skip(offset));
     }
 
+    protected static long count(DBObject query, Core core, String collectionName) {
+        return collection(core, collectionName).count(query);
+    }
+
     private static List<DBObject> cursorToList(DBCursor cursor) {
         List<DBObject> results = Lists.newArrayList();
 
@@ -117,6 +117,9 @@ public abstract class Persisted {
         return collection(core, collectionName).findOne(query);
     }
 
+    protected static DBObject findOne(DBObject query, DBObject sort, Core core, String collectioName) {
+        return collection(core, collectioName).findOne(query, new BasicDBObject(), sort);
+    }
     public static long totalCount(Core core, String collectionName) {
         return collection(core, collectionName).count();
     }
@@ -125,12 +128,12 @@ public abstract class Persisted {
 		collection().remove(new BasicDBObject("_id", id));
 	}
 
-    public static void destroyAll(Core core, String collectionName) {
-        collection(core, collectionName).remove(new BasicDBObject());
+    public static WriteResult destroyAll(Core core, String collectionName) {
+        return collection(core, collectionName).remove(new BasicDBObject());
     }
 
-    public static void destroy(DBObject query, Core core, String collectionName) {
-        collection(core, collectionName).remove(query);
+    public static WriteResult destroy(DBObject query, Core core, String collectionName) {
+        return collection(core, collectionName).remove(query);
     }
 
 	public ObjectId save() throws ValidationException {
@@ -151,7 +154,7 @@ public abstract class Persisted {
 		 */
 		BasicDBObject q = new BasicDBObject("_id", id);
 		collection().update(q, doc, true, false);
-		
+
 		return id;
 	}
 
@@ -230,8 +233,12 @@ public abstract class Persisted {
         collection().update(qry, update);
     }
 
-    public ObjectId getId() {
+    public ObjectId getObjectId() {
         return this.id;
+    }
+
+    public String getId() {
+        return getObjectId().toStringMongod();
     }
 
     private void fieldTransformations(Map<String, Object> doc) {

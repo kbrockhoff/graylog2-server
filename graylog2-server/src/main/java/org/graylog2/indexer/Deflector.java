@@ -25,8 +25,7 @@ import org.elasticsearch.action.admin.indices.stats.IndexStats;
 import org.elasticsearch.indices.InvalidAliasNameException;
 import org.graylog2.Core;
 import org.graylog2.indexer.indices.jobs.OptimizeIndexJob;
-import org.graylog2.indexer.ranges.IndexRange;
-import org.graylog2.plugin.Tools;
+import org.graylog2.indexer.ranges.RebuildIndexRangesJob;
 import org.graylog2.system.activities.Activity;
 import org.graylog2.system.jobs.SystemJobConcurrencyException;
 import org.slf4j.Logger;
@@ -51,7 +50,7 @@ public class Deflector { // extends Ablenkblech
     
     private static final Logger LOG = LoggerFactory.getLogger(Deflector.class);
     
-    public static final String DEFLECTOR_NAME = "graylog2_deflector";
+    public static final String DEFLECTOR_SUFFIX = "deflector";
     
     Core server;
     
@@ -60,13 +59,13 @@ public class Deflector { // extends Ablenkblech
     }
     
     public boolean isUp() {
-        return this.server.getIndexer().indices().aliasExists(DEFLECTOR_NAME);
+        return this.server.getIndexer().indices().aliasExists(getName());
     }
     
     public void setUp() {
         // Check if there already is an deflector index pointing somewhere.
         if (isUp()) {
-            LOG.info("Found deflector alias <{}>. Using it.", DEFLECTOR_NAME);
+            LOG.info("Found deflector alias <{}>. Using it.", getName());
         } else {
             LOG.info("Did not find an deflector alias. Setting one up now.");
 
@@ -85,7 +84,7 @@ public class Deflector { // extends Ablenkblech
                 cycle(); // No index, so automatically cycling to a new one.
             }
             } catch (InvalidAliasNameException e) {
-                LOG.error("Seems like there already is an index called [{}]", DEFLECTOR_NAME);
+                LOG.error("Seems like there already is an index called [{}]", getName());
             }
         }
     }
@@ -113,7 +112,9 @@ public class Deflector { // extends Ablenkblech
         
         // Create new index.
         LOG.info("Creating index target <{}>...", newTarget);
-        server.getIndexer().indices().create(newTarget);
+        if (!server.getIndexer().indices().create(newTarget)) {
+            LOG.error("Could not properly create new target <{}>", newTarget);
+        }
         updateIndexRanges(newTarget);
 
         LOG.info("Done!");
@@ -210,6 +211,7 @@ public class Deflector { // extends Ablenkblech
     public static String buildIndexName(String prefix, int number) {
         return prefix + "_" + number;
     }
+    public static String buildName(String prefix) { return prefix + "_" + DEFLECTOR_SUFFIX; }
     
     public static int extractIndexNumber(String indexName) throws NumberFormatException {
         String[] parts = indexName.split("_");
@@ -223,27 +225,33 @@ public class Deflector { // extends Ablenkblech
     }
     
     private boolean ourIndex(String indexName) {
-        return indexName != DEFLECTOR_NAME && indexName.startsWith(server.getConfiguration().getElasticSearchIndexPrefix() + "_");
+        return indexName != getName() && indexName.startsWith(server.getConfiguration().getElasticSearchIndexPrefix() + "_");
     }
     
     public void pointTo(String newIndex, String oldIndex) {
-        server.getIndexer().cycleAlias(DEFLECTOR_NAME, newIndex, oldIndex);
+        server.getIndexer().cycleAlias(getName(), newIndex, oldIndex);
     }
     
     public void pointTo(String newIndex) {
-        server.getIndexer().cycleAlias(DEFLECTOR_NAME, newIndex);
+        server.getIndexer().cycleAlias(getName(), newIndex);
     }
 
     private void updateIndexRanges(String index) {
-        Map<String, Object> params = Maps.newHashMap();
-        params.put("index", index);
-        params.put("start", Tools.getUTCTimestamp());
-
-        IndexRange range = new IndexRange(server, params);
-        range.saveWithoutValidation();
+        // Re-calculate index ranges.
+        try {
+            server.getSystemJobManager().submit(new RebuildIndexRangesJob(server));
+        } catch (SystemJobConcurrencyException e) {
+            String msg = "Could not re-calculate index ranges after cycling deflector: Maximum concurrency of job is reached.";
+            server.getActivityWriter().write(new Activity(msg, Deflector.class));
+            LOG.error(msg);
+        }
     }
 
     public String getCurrentActualTargetIndex() {
-        return server.getIndexer().indices().aliasTarget(Deflector.DEFLECTOR_NAME);
+        return server.getIndexer().indices().aliasTarget(getName());
+    }
+
+    public String getName() {
+        return buildName(server.getConfiguration().getElasticSearchIndexPrefix());
     }
 }

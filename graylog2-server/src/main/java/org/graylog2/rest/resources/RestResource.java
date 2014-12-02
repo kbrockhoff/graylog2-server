@@ -29,6 +29,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.ObjectWriter;
 import com.fasterxml.jackson.databind.PropertyNamingStrategy;
 import com.fasterxml.jackson.databind.SerializationFeature;
+import com.fasterxml.jackson.datatype.guava.GuavaModule;
+import com.fasterxml.jackson.datatype.joda.JodaModule;
 import com.fasterxml.jackson.jaxrs.cfg.EndpointConfigBase;
 import com.fasterxml.jackson.jaxrs.cfg.ObjectWriterInjector;
 import com.fasterxml.jackson.jaxrs.cfg.ObjectWriterModifier;
@@ -41,6 +43,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import javax.inject.Inject;
+import javax.ws.rs.ForbiddenException;
 import javax.ws.rs.QueryParam;
 import javax.ws.rs.WebApplicationException;
 import javax.ws.rs.core.*;
@@ -69,9 +72,13 @@ public abstract class RestResource {
         /*
           * Jackson is serializing java.util.Date (coming out of MongoDB for example) as UNIX epoch by default.
           * Make it write ISO8601 instead.
+          * TODO THIS IS EXTREMELY WRONG AND WILL LEAD TO BUGS. NEED TO HAVE IT INJECTED ONCE, AND THEN REUSED (see ObjectMapperProvider)
+          * but everyone and their grandmother are using this directly in resource objects instead of relying on Jackson :(
           */
-        objectMapper.configure(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS, false);
+        objectMapper.disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
         objectMapper.setPropertyNamingStrategy(PropertyNamingStrategy.CAMEL_CASE_TO_LOWER_CASE_WITH_UNDERSCORES);
+        objectMapper.registerModule(new JodaModule());
+        objectMapper.registerModule(new GuavaModule());
     }
 
     @QueryParam("pretty")
@@ -108,6 +115,26 @@ public abstract class RestResource {
         }
         ShiroSecurityContext.ShiroPrincipal principal = (ShiroSecurityContext.ShiroPrincipal) p;
         return principal.getSubject();
+    }
+
+    protected boolean isPermitted(String permission, String instanceId) {
+        return getSubject().isPermitted(permission + ":" + instanceId);
+    }
+
+    protected void checkPermission(String permission) {
+        if (!isPermitted(permission)) {
+            throw new ForbiddenException("Not authorized");
+        }
+    }
+
+    protected boolean isPermitted(String permission) {
+        return getSubject().isPermitted(permission);
+    }
+
+    protected void checkPermission(String permission, String instanceId) {
+        if (!isPermitted(permission, instanceId)) {
+            throw new ForbiddenException("Not authorized to access resource id " + instanceId);
+        }
     }
 
 	protected ObjectId loadObjectId(String id) {

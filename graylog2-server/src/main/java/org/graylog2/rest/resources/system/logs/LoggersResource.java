@@ -23,18 +23,23 @@ import com.codahale.metrics.annotation.Timed;
 import com.google.common.collect.Maps;
 import org.apache.log4j.Level;
 import org.apache.log4j.Logger;
+import org.apache.shiro.authz.annotation.RequiresAuthentication;
 import org.graylog2.rest.documentation.annotations.*;
 import org.graylog2.rest.resources.RestResource;
+import org.graylog2.security.RestPermissions;
 import org.slf4j.LoggerFactory;
 
 import javax.ws.rs.*;
 import javax.ws.rs.core.MediaType;
 import javax.ws.rs.core.Response;
-import java.util.*;
+import java.util.Enumeration;
+import java.util.HashMap;
+import java.util.Map;
 
 /**
  * @author Lennart Koopmann <lennart@torch.sh>
  */
+@RequiresAuthentication
 @Api(value = "System/Loggers", description = "Internal Graylog2 loggers")
 @Path("/system/loggers")
 public class LoggersResource extends RestResource {
@@ -57,7 +62,9 @@ public class LoggersResource extends RestResource {
         Enumeration loggers = Logger.getRootLogger().getLoggerRepository().getCurrentLoggers();
         while(loggers.hasMoreElements()) {
             Logger logger = (Logger) loggers.nextElement();
-
+            if (!isPermitted(RestPermissions.LOGGERS_READ, logger.getName())) {
+                continue;
+            }
             Map<String, Object> loggerInfo = Maps.newHashMap();
             loggerInfo.put("level", logger.getEffectiveLevel().toString().toLowerCase());
             loggerInfo.put("level_syslog", logger.getEffectiveLevel().getSyslogEquivalent());
@@ -81,6 +88,9 @@ public class LoggersResource extends RestResource {
         Map<String, Object> subsystems = Maps.newHashMap();
 
         for(Map.Entry<String, Subsystem> subsystem : SUBSYSTEMS.entrySet()) {
+            if (!isPermitted(RestPermissions.LOGGERS_READSUBSYSTEM, subsystem.getKey())) {
+                continue;
+            }
             try {
                 Map<String, Object> info = Maps.newHashMap();
                 info.put("title", subsystem.getValue().getTitle());
@@ -118,7 +128,7 @@ public class LoggersResource extends RestResource {
             LOG.warn("No such subsystem: [{}]. Returning 404.", subsystemTitle);
             return Response.status(404).build();
         }
-
+        checkPermission(RestPermissions.LOGGERS_EDITSUBSYSTEM, subsystemTitle);
         Subsystem subsystem = SUBSYSTEMS.get(subsystemTitle);
 
         // This is never null. Worst case is a logger that does not exist.
@@ -138,6 +148,7 @@ public class LoggersResource extends RestResource {
     public Response setSingleLoggerLevel(
             @ApiParam(title = "loggerName", required = true) @PathParam("loggerName") String loggerName,
             @ApiParam(title = "level", required = true) @PathParam("level") String level) {
+        checkPermission(RestPermissions.LOGGERS_EDIT, loggerName);
         // This is never null. Worst case is a logger that does not exist.
         Logger logger = Logger.getLogger(loggerName);
 

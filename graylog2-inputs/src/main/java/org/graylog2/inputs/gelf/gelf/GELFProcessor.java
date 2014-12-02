@@ -1,5 +1,5 @@
-/**
- * Copyright 2012, 2013 Lennart Koopmann <lennart@socketfeed.com>
+/*
+ * Copyright 2013-2014 TORCH GmbH
  *
  * This file is part of Graylog2.
  *
@@ -13,9 +13,9 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
+ *
  * You should have received a copy of the GNU General Public License
  * along with Graylog2.  If not, see <http://www.gnu.org/licenses/>.
- *
  */
 
 package org.graylog2.inputs.gelf.gelf;
@@ -24,7 +24,6 @@ import com.codahale.metrics.Timer;
 import com.fasterxml.jackson.core.JsonParser;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import org.graylog2.plugin.GraylogServer;
 import org.graylog2.plugin.InputHost;
 import org.graylog2.plugin.Message;
 import org.graylog2.plugin.Tools;
@@ -62,11 +61,17 @@ public class GELFProcessor {
         server.metrics().meter(name(metricName, "incomingMessages")).mark();
 
         // Convert to LogMessage
-        Message lm = parse(message.getJSON(), sourceInput);
+        Message lm = null;
+        try {
+            lm = parse(message.getJSON(), sourceInput);
+        } catch (IllegalStateException e) {
+            LOG.error("Corrupt or invalid message received: ", e);
+            return;
+        }
 
-        if (!lm.isComplete()) {
+        if (lm == null || !lm.isComplete()) {
             server.metrics().meter(name(metricName, "incompleteMessages")).mark();
-            LOG.debug("Skipping incomplete message.");
+            LOG.debug("Skipping incomplete message: {}", lm.getValidationErrors());
             return;
         }
 
@@ -85,6 +90,7 @@ public class GELFProcessor {
             json = objectMapper.readTree(message);
         } catch (Exception e) {
             LOG.error("Could not parse JSON!", e);
+            LOG.debug("This is the failed message: ", message);
             json = null;
         }
 
@@ -96,8 +102,9 @@ public class GELFProcessor {
         double messageTimestamp = doubleValue(json, "timestamp");
         DateTime timestamp;
         if (messageTimestamp <= 0) {
-            timestamp = new DateTime();
+            timestamp = Tools.iso8601();
         } else {
+            // we treat this as a unix timestamp
             timestamp = Tools.dateTimeFromDouble(messageTimestamp);
         }
 
@@ -164,9 +171,16 @@ public class GELFProcessor {
                 fieldValue = value.asDouble();
             } else if (value.isIntegralNumber()) {
                 fieldValue = value.asLong();
-            } else {
+            } else if (value.isNull()) {
+                LOG.debug("Field [{}] is NULL. Skipping.", key);
+                continue;
+            } else if(value.isTextual()) {
                 fieldValue = value.asText();
+            } else {
+                LOG.debug("Field [{}] has unknown value type. Skipping.", key);
+                continue;
             }
+
             lm.addField(key, fieldValue);
         }
 

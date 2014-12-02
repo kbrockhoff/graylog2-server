@@ -20,6 +20,7 @@
 package org.graylog2.rest.resources.system.inputs;
 
 import com.codahale.metrics.annotation.Timed;
+import org.apache.shiro.authz.annotation.RequiresAuthentication;
 import org.graylog2.database.ValidationException;
 import org.graylog2.inputs.Input;
 import org.graylog2.plugin.Message;
@@ -27,6 +28,7 @@ import org.graylog2.plugin.inputs.MessageInput;
 import org.graylog2.rest.documentation.annotations.*;
 import org.graylog2.rest.resources.RestResource;
 import org.graylog2.rest.resources.system.inputs.requests.CreateStaticFieldRequest;
+import org.graylog2.security.RestPermissions;
 import org.graylog2.system.activities.Activity;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -39,6 +41,7 @@ import java.io.IOException;
 /**
  * @author Lennart Koopmann <lennart@torch.sh>
  */
+@RequiresAuthentication
 @Api(value = "StaticFields", description = "Static fields of an input")
 @Path("/system/inputs/{inputId}/staticfields")
 public class StaticFieldsResource extends RestResource {
@@ -61,8 +64,9 @@ public class StaticFieldsResource extends RestResource {
             LOG.error("Missing inputId. Returning HTTP 400.");
             throw new WebApplicationException(400);
         }
+        checkPermission(RestPermissions.INPUTS_EDIT, inputId);
 
-        MessageInput input = core.inputs().getRunningInputs().get(inputId);
+        MessageInput input = core.inputs().getRunningInput(inputId);
 
         if (input == null) {
             LOG.error("Input <{}> not found.", inputId);
@@ -127,8 +131,9 @@ public class StaticFieldsResource extends RestResource {
             LOG.error("Missing inputId. Returning HTTP 400.");
             throw new WebApplicationException(400);
         }
+        checkPermission(RestPermissions.INPUTS_EDIT, inputId);
 
-        MessageInput input = core.inputs().getRunningInputs().get(inputId);
+        MessageInput input = core.inputs().getRunningInput(inputId);
 
         if (input == null) {
             LOG.error("Input <{}> not found.", inputId);

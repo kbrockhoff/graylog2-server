@@ -46,10 +46,12 @@ public class DateConverter extends Converter {
     @Override
     public Object convert(String value) {
         if (value == null || value.isEmpty()) {
-            return value;
+            return null;
         }
 
-        return DateTime.parse(value, DateTimeFormat.forPattern(dateFormat));
+        DateTime localNow = new DateTime();
+
+        return DateTime.parse(value,DateTimeFormat.forPattern(dateFormat).withDefaultYear(localNow.getYear()));
     }
 
     @Override

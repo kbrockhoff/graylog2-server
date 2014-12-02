@@ -60,8 +60,8 @@ cd builds/
 
 # tar it
 echo "Building Tarball ..."
-gtar cfz $BUILD_NAME.tar.gz $BUILD_NAME
+tar cf $BUILD_NAME.tar $BUILD_NAME
+gzip $BUILD_NAME.tar
 rm -rf ./$BUILD_NAME
-mv $BUILD_NAME.tar.gz $BUILD_NAME.tgz
 
 echo "DONE! Created Graylog2 Server release $BUILD_NAME on $BUILD_DATE"

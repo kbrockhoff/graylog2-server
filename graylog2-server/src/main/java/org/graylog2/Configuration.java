@@ -36,7 +36,6 @@ import org.slf4j.LoggerFactory;
 
 import java.net.URI;
 import java.net.UnknownHostException;
-import java.util.Arrays;
 import java.util.List;
 
 /**
@@ -83,13 +82,16 @@ public class Configuration {
     private int maxNumberOfIndices = 20;
 
     @Parameter(value = "output_batch_size", required = true, validator = PositiveIntegerValidator.class)
-    private int outputBatchSize = 5000;
+    private int outputBatchSize = 25;
     
     @Parameter(value = "processbuffer_processors", required = true, validator = PositiveIntegerValidator.class)
     private int processBufferProcessors = 5;
-    
+
+    @Parameter(value = "output_flush_interval", required = true, validator = PositiveIntegerValidator.class)
+    private int outputFlushInterval = 1;
+
     @Parameter(value = "outputbuffer_processors", required = true, validator = PositiveIntegerValidator.class)
-    private int outputBufferProcessors = 5;
+    private int outputBufferProcessors = 3;
     
     @Parameter(value = "outputbuffer_processor_threads_max_pool_size", required = true, validator = PositiveIntegerValidator.class)
     private int outputBufferProcessorThreadsMaxPoolSize = 30;
@@ -102,6 +104,9 @@ public class Configuration {
     
     @Parameter(value = "ring_size", required = true, validator = PositiveIntegerValidator.class)
     private int ringSize = 1024;
+
+    @Parameter(value = "dead_letters_enabled")
+    private boolean deadLettersEnabled = false;
 
     @Parameter(value = "elasticsearch_config_file", required = false, validator = FileReadableValidator.class)
     private String elasticSearchConfigFile; // = "/etc/graylog2-elasticsearch.yml";
@@ -148,42 +153,6 @@ public class Configuration {
     @Parameter("rules_file")
     private String droolsRulesFile;
 
-    @Parameter(value = "enable_graphite_output", required = false)
-    private boolean enableGraphiteOutput = false;
-
-    @Parameter(value = "graphite_carbon_host", required = false)
-    private String graphiteCarbonHost = "127.0.0.1";
-
-    @Parameter(value = "graphite_carbon_tcp_port", validator = InetPortValidator.class, required = false)
-    private int graphiteCarbonTcpPort = 2003;
-    
-    @Parameter(value = "graphite_prefix", required = false)
-    private String graphitePrefix = "graylog2-server";
-
-    @Parameter(value = "enable_libratometrics_output", required = false)
-    private boolean enableLibratoMetricsOutput = false;
-    
-    @Parameter(value = "enable_libratometrics_system_metrics", required = false)
-    private boolean enableLibratoSystemMetrics = false;
-
-    @Parameter(value = "libratometrics_api_user", required = false)
-    private String libratometricsApiUser;
-
-    @Parameter(value = "libratometrics_api_token", required = false)
-    private String libratometricsApiToken;
-
-    @Parameter(value = "libratometrics_stream_filter", required = false)
-    private String libratometricsStreamFilter = "";
-
-    @Parameter(value = "libratometrics_host_filter", required = false)
-    private String libratometricsHostFilter = "";
-
-    @Parameter(value = "libratometrics_interval", validator = PositiveIntegerValidator.class, required = false)
-    private int libratometricsInterval = 10;
-
-    @Parameter(value = "libratometrics_prefix", required = false)
-    private String libratometricsPrefix = "gl2-";
-
     @Parameter(value = "plugin_dir", required = false)
     private String pluginDir = "plugin";
 
@@ -199,20 +168,29 @@ public class Configuration {
     @Parameter(value = "allow_leading_wildcard_searches", required = false)
     private boolean allowLeadingWildcardSearches = false;
 
+    @Parameter(value = "allow_highlighting", required = false)
+    private boolean allowHighlighting = false;
+
+    @Parameter(value = "enable_metrics_collection", required = false)
+    private boolean metricsCollectionEnabled = false;
+
+    @Parameter(value = "lb_recognition_period_seconds", validator = PositiveIntegerValidator.class)
+    private int loadBalancerRecognitionPeriodSeconds = 3;
+
     /* Elasticsearch defaults */
-    @Parameter(value = "elasticsearch_cluster_name", required = true)
+    @Parameter(value = "elasticsearch_cluster_name", required = false)
     private String esClusterName = "graylog2";
 
-    @Parameter(value = "elasticsearch_node_name", required = true)
+    @Parameter(value = "elasticsearch_node_name", required = false)
     private String esNodeName = "graylog2-server";
 
-    @Parameter(value = "elasticsearch_node_master", required = true)
+    @Parameter(value = "elasticsearch_node_master", required = false)
     private boolean esIsMasterEligible = false;
 
-    @Parameter(value = "elasticsearch_node_data", required = true)
+    @Parameter(value = "elasticsearch_node_data", required = false)
     private boolean esStoreData = false;
 
-    @Parameter(value = "elasticsearch_transport_tcp_port", validator = InetPortValidator.class, required = true)
+    @Parameter(value = "elasticsearch_transport_tcp_port", validator = InetPortValidator.class, required = false)
     private int esTransportTcpPort = 9350;
 
     @Parameter(value = "elasticsearch_http_enabled", required = false)
@@ -223,6 +201,67 @@ public class Configuration {
 
     @Parameter(value = "elasticsearch_discovery_zen_ping_unicast_hosts", required = false, converter = StringListConverter.class)
     private List<String> esUnicastHosts;
+
+    @Parameter(value = "elasticsearch_discovery_initial_state_timeout", required = false)
+    private String esInitialStateTimeout = "3s";
+
+    @Parameter(value = "elasticsearch_network_host", required = false)
+    private String esNetworkHost;
+
+    @Parameter(value = "elasticsearch_network_bind_host", required = false)
+    private String esNetworkBindHost;
+
+    @Parameter(value = "elasticsearch_network_publish_host", required = false)
+    private String esNetworkPublishHost;
+
+    @Parameter(value = "versionchecks", required = false)
+    private boolean versionchecks = true;
+
+    @Parameter(value = "versionchecks_uri", required = false)
+    private String versionchecksUri = "http://versioncheck.torch.sh/check";
+
+    @Parameter(value = "http_proxy_uri", required = false)
+    private String httpProxyUri;
+
+    // Transport: Email
+    @Parameter(value = "transport_email_enabled", required = false)
+    private boolean emailTransportEnabled = false;
+
+    @Parameter(value = "transport_email_hostname", required = false)
+    private String emailTransportHostname;
+
+    @Parameter(value = "transport_email_port", validator = InetPortValidator.class, required = false)
+    private int emailTransportPort;
+
+    @Parameter(value = "transport_email_use_auth", required = false)
+    private boolean emailTransportUseAuth = false;
+
+    @Parameter(value = "transport_email_use_tls", required = false)
+    private boolean emailTransportUseTls = false;
+
+    @Parameter(value = "transport_email_use_ssl", required = false)
+    private boolean emailTransportUseSsl = true;
+
+    @Parameter(value = "transport_email_auth_username", required = false)
+    private String emailTransportUsername;
+
+    @Parameter(value = "transport_email_auth_password", required = false)
+    private String emailTransportPassword;
+
+    @Parameter(value = "transport_email_subject_prefix", required = false)
+    private String emailTransportSubjectPrefix;
+
+    @Parameter(value = "transport_email_from_email", required = false)
+    private String emailTransportFromEmail;
+
+    @Parameter(value = "transport_email_web_interface_url", required = false)
+    private URI emailTransportWebInterfaceUrl;
+
+    @Parameter(value = "rest_enable_cors", required = false)
+    private boolean restEnableCors = false;
+
+    @Parameter(value = "rest_enable_gzip", required = false)
+    private boolean restEnableGzip = false;
 
     public boolean isMaster() {
         return isMaster;
@@ -239,6 +278,10 @@ public class Configuration {
     public boolean performRetention() {
         return !noRetention;
     }
+
+    public void setPerformRetention(boolean retention) {
+        noRetention = !retention;
+    }
     
     public int getMaxNumberOfIndices() {
         return maxNumberOfIndices;
@@ -247,11 +290,14 @@ public class Configuration {
     public int getOutputBatchSize() {
         return outputBatchSize;
     }
-    
     public int getProcessBufferProcessors() {
         return processBufferProcessors;
     }
     
+    public int getOutputFlushInterval() {
+        return outputFlushInterval;
+    }
+
     public int getOutputBufferProcessors() {
         return outputBufferProcessors;
     }
@@ -263,11 +309,7 @@ public class Configuration {
     public int getOutputBufferProcessorThreadsMaxPoolSize() {
         return outputBufferProcessorThreadsMaxPoolSize;
     }
-    
-    public int getUdpRecvBufferSizes() {
-        return udpRecvBufferSizes;
-    }
-    
+
     public WaitStrategy getProcessorWaitStrategy() {
         if (processorWaitStrategy.equals("sleeping")) {
             return new SleepingWaitStrategy();
@@ -354,6 +396,8 @@ public class Configuration {
         return droolsRulesFile;
     }
 
+
+
     public List<ServerAddress> getMongoReplicaSet() {
         List<ServerAddress> replicaServers = Lists.newArrayList();
 
@@ -385,57 +429,6 @@ public class Configuration {
         return replicaServers;
     }
 
-    public boolean isEnableGraphiteOutput() {
-        return enableGraphiteOutput;
-    }
-
-    public String getGraphiteCarbonHost() {
-        return graphiteCarbonHost;
-    }
-
-    public int getGraphiteCarbonTcpPort() {
-        return graphiteCarbonTcpPort;
-    }
-    
-    public String getGraphitePrefix() {
-        return graphitePrefix;
-    }
-
-    public boolean isEnableLibratoMetricsOutput() {
-        return enableLibratoMetricsOutput;
-    }
-
-    public boolean isEnableLibratoSystemMetrics() {
-        return enableLibratoSystemMetrics;
-    }
-    
-    public String getLibratoMetricsAPIUser() {
-        return libratometricsApiUser;
-    }
-
-    public String getLibratoMetricsAPIToken() {
-        return libratometricsApiToken;
-    }
-
-    public List<String> getLibratoMetricsStreamFilter() {
-        List<String> r = Lists.newArrayList();
-        r.addAll(Arrays.asList(libratometricsStreamFilter.split(",")));
-
-        return r;
-    }
-
-    public String getLibratoMetricsHostsFilter() {
-        return libratometricsHostFilter;
-    }
-
-    public int getLibratoMetricsInterval() {
-        return libratometricsInterval;
-    }
-
-    public String getLibratoMetricsPrefix() {
-        return libratometricsPrefix;
-    }
-
     public String getPluginDir() {
         return pluginDir;
     }
@@ -464,6 +457,28 @@ public class Configuration {
         return Tools.getUriStandard(restTransportUri);
     }
 
+    public URI getDefaultRestTransportUri() {
+        URI transportUri;
+        URI listenUri = getRestListenUri();
+
+        if (listenUri.getHost().equals("0.0.0.0")) {
+            String guessedIf;
+            try {
+                guessedIf = Tools.guessPrimaryNetworkAddress().getHostAddress();
+            } catch (Exception e) {
+                LOG.error("Could not guess primary network address for rest_transport_uri. Please configure it in your graylog2.conf.", e);
+                throw new RuntimeException("No rest_transport_uri.");
+            }
+
+            String transportStr = "http://" + guessedIf + ":" + listenUri.getPort();
+            transportUri = Tools.getUriStandard(transportStr);
+        } else {
+            transportUri = listenUri;
+        }
+
+        return transportUri;
+    }
+
     public String getRootUsername() {
         return rootUsername;
     }
@@ -474,6 +489,10 @@ public class Configuration {
 
     public void setRestTransportUri(String restTransportUri) {
         this.restTransportUri = restTransportUri;
+    }
+
+    public int getUdpRecvBufferSizes() {
+        return udpRecvBufferSizes;
     }
 
     public String getEsClusterName() {
@@ -508,6 +527,22 @@ public class Configuration {
         return esUnicastHosts;
     }
 
+    public String getEsInitialStateTimeout() {
+        return esInitialStateTimeout;
+    }
+
+    public String getEsNetworkHost() {
+        return esNetworkHost;
+    }
+
+    public String getEsNetworkBindHost() {
+        return esNetworkBindHost;
+    }
+
+    public String getEsNetworkPublishHost() {
+        return esNetworkPublishHost;
+    }
+
     public String getRetentionStrategy() {
         return retentionStrategy;
     }
@@ -515,4 +550,85 @@ public class Configuration {
     public boolean isAllowLeadingWildcardSearches() {
         return allowLeadingWildcardSearches;
     }
+    public boolean isAllowHighlighting() {
+        return allowHighlighting;
+    }
+
+    public boolean isMetricsCollectionEnabled() {
+        return metricsCollectionEnabled;
+    }
+
+    public boolean isEmailTransportEnabled() {
+        return emailTransportEnabled;
+    }
+
+    public String getEmailTransportHostname() {
+        return emailTransportHostname;
+    }
+
+    public int getEmailTransportPort() {
+        return emailTransportPort;
+    }
+
+    public boolean isEmailTransportUseAuth() {
+        return emailTransportUseAuth;
+    }
+
+    public boolean isEmailTransportUseTls() {
+        return emailTransportUseTls;
+    }
+
+    public boolean isEmailTransportUseSsl() {
+        return emailTransportUseSsl;
+    }
+
+    public String getEmailTransportUsername() {
+        return emailTransportUsername;
+    }
+
+    public String getEmailTransportPassword() {
+        return emailTransportPassword;
+    }
+
+    public String getEmailTransportSubjectPrefix() {
+        return emailTransportSubjectPrefix;
+    }
+
+    public String getEmailTransportFromEmail() {
+        return emailTransportFromEmail;
+    }
+
+    public URI getEmailTransportWebInterfaceUrl() {
+        return emailTransportWebInterfaceUrl;
+    }
+
+    public boolean isRestEnableCors() {
+        return restEnableCors;
+    }
+
+    public boolean isRestEnableGzip() {
+        return restEnableGzip;
+    }
+
+    public boolean isVersionchecks() {
+        return versionchecks;
+    }
+
+    public String getVersionchecksUri() {
+        return versionchecksUri;
+    }
+
+    public String getHttpProxyUri() {
+        return httpProxyUri;
+    }
+
+    public boolean isDeadLettersEnabled() {
+        return deadLettersEnabled;
+    }
+
+    public int getLoadBalancerRecognitionPeriodSeconds() {
+        return loadBalancerRecognitionPeriodSeconds;
+    }
+
 }
+

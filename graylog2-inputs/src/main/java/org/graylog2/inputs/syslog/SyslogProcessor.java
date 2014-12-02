@@ -86,13 +86,13 @@ public class SyslogProcessor {
             lm = parse(msg, remoteAddress);
         } catch (Exception e) {
             parsingFailures.mark();
-            LOG.error("Could not parse syslog message. Not further handling.", e);
+            LOG.warn("Could not parse syslog message. Not further handling.", e);
             return;
         }
 
         if (!lm.isComplete()) {
             incompleteMessages.mark();
-            LOG.debug("Skipping incomplete message.");
+            LOG.debug("Skipping incomplete message. Parsed fields: [{}]", lm.getFields());
             return;
         }
 
@@ -193,10 +193,10 @@ public class SyslogProcessor {
         // Check if date could be parsed.
         if (msg.getDate() == null) {
             if (config.getBoolean(SyslogInputBase.CK_ALLOW_OVERRIDE_DATE)) {
-                LOG.info("Date could not be parsed. Was set to NOW because {} is true.", SyslogInputBase.CK_ALLOW_OVERRIDE_DATE);
-                return new DateTime();
+                LOG.debug("Date could not be parsed. Was set to NOW because {} is true.", SyslogInputBase.CK_ALLOW_OVERRIDE_DATE);
+                return Tools.iso8601();
             } else {
-                LOG.info("Syslog message is missing date or date could not be parsed. (Possibly set {} to true) "
+                LOG.warn("Syslog message is missing date or date could not be parsed. (Possibly set {} to true) "
                         + "Not further handling. Message was: {}", SyslogInputBase.CK_ALLOW_OVERRIDE_DATE, new String(msg.getRaw()));
                 throw new IllegalStateException();
             }

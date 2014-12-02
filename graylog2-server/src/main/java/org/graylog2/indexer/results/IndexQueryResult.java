@@ -19,17 +19,20 @@
  */
 package org.graylog2.indexer.results;
 
+import com.beust.jcommander.internal.Lists;
 import org.elasticsearch.common.bytes.BytesReference;
 import org.elasticsearch.common.unit.TimeValue;
 import org.elasticsearch.common.xcontent.XContentHelper;
+import org.elasticsearch.search.SearchHit;
+import org.elasticsearch.search.SearchHits;
 
 import java.io.IOException;
+import java.util.List;
 
 /**
  * @author Lennart Koopmann <lennart@torch.sh>
  */
 public class IndexQueryResult {
-
     private final String originalQuery;
     private final TimeValue took;
     private final BytesReference builtQuery;
@@ -57,4 +60,12 @@ public class IndexQueryResult {
         return took;
     }
 
+    protected List<ResultMessage> buildResults(SearchHits hits) {
+        List<ResultMessage> r = Lists.newArrayList();
+
+        for (SearchHit hit : hits) {
+            r.add(ResultMessage.parseFromSource(hit));
+        }
+        return r;
+    }
 }

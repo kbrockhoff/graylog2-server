@@ -40,15 +40,14 @@ import org.graylog2.inputs.raw.udp.RawUDPInput;
 import org.graylog2.inputs.syslog.tcp.SyslogTCPInput;
 import org.graylog2.inputs.syslog.udp.SyslogUDPInput;
 import org.graylog2.plugin.Tools;
+import org.graylog2.plugin.lifecycles.Lifecycle;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.bridge.SLF4JBridgeHandler;
 
 import java.io.File;
 import java.io.FileWriter;
-import java.io.IOException;
 import java.io.Writer;
-import java.util.concurrent.ExecutionException;
 
 /**
  * @author Lennart Koopmann <lennart@torch.sh>
@@ -125,7 +124,14 @@ public class Main {
         }
 
         Radio radio = new Radio();
-        radio.initialize(configuration, metrics);
+        radio.setLifecycle(Lifecycle.STARTING);
+
+        try {
+            radio.initialize(configuration, metrics);
+        } catch(Exception e) {
+            LOG.error("Initialization error.", e);
+            System.exit(1);
+        }
 
         // Register in Graylog2 cluster.
         radio.ping();
@@ -168,6 +174,7 @@ public class Main {
         radio.inputs().register(LocalMetricsInput.class, LocalMetricsInput.NAME);
         radio.inputs().register(JsonPathInput.class, JsonPathInput.NAME);
 
+        radio.setLifecycle(Lifecycle.RUNNING);
         LOG.info("Graylog2 Radio up and running.");
 
         while (true) {

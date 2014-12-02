@@ -24,9 +24,11 @@ import org.elasticsearch.action.admin.indices.stats.IndexStats;
 import org.graylog2.indexer.IndexHelper;
 import org.graylog2.indexer.NoTargetIndexException;
 import org.graylog2.indexer.ranges.IndexRange;
+import org.graylog2.indexer.ranges.RebuildIndexRangesJob;
 import org.graylog2.indexer.retention.RetentionStrategyFactory;
 import org.graylog2.plugin.indexer.retention.RetentionStrategy;
 import org.graylog2.system.activities.Activity;
+import org.graylog2.system.jobs.SystemJobConcurrencyException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.graylog2.Core;
@@ -36,24 +38,15 @@ import java.util.Map;
 /**
  * @author Lennart Koopmann <lennart@socketfeed.com>
  */
-public class IndexRetentionThread implements Runnable {
+public class IndexRetentionThread extends Periodical {
 
     private static final Logger LOG = LoggerFactory.getLogger(IndexRetentionThread.class);
 
-    private final Core server;
-    
-    public static final int INITIAL_DELAY = 0;
-    public static final int PERIOD = 300; // Run every five minutes.
-
-    public IndexRetentionThread(Core server) {
-        this.server = server;
-    }
-
     @Override
     public void run() {
-        Map<String, IndexStats> indices = server.getDeflector().getAllDeflectorIndices();
+        Map<String, IndexStats> indices = core.getDeflector().getAllDeflectorIndices();
         int indexCount = indices.size();
-        int maxIndices = server.getConfiguration().getMaxNumberOfIndices();
+        int maxIndices = core.getConfiguration().getMaxNumberOfIndices();
 
         // Do we have more indices than the configured maximum?
         if (indexCount <= maxIndices) {
@@ -67,11 +60,11 @@ public class IndexRetentionThread implements Runnable {
         String msg = "Number of indices (" + indexCount + ") higher than limit (" + maxIndices + "). " +
                 "Running retention for " + removeCount + " indices.";
         LOG.info(msg);
-        server.getActivityWriter().write(new Activity(msg, IndexRetentionThread.class));
+        core.getActivityWriter().write(new Activity(msg, IndexRetentionThread.class));
 
         try {
             runRetention(
-                    RetentionStrategyFactory.fromString(server, server.getConfiguration().getRetentionStrategy()),
+                    RetentionStrategyFactory.fromString(core, core.getConfiguration().getRetentionStrategy()),
                     indices,
                     removeCount
             );
@@ -85,7 +78,7 @@ public class IndexRetentionThread implements Runnable {
     public void runRetention(RetentionStrategy strategy, Map<String, IndexStats> indices, int removeCount) throws NoTargetIndexException {
         for (String indexName : IndexHelper.getOldestIndices(indices.keySet(), removeCount)) {
             // Never run against the current deflector target.
-            if (server.getDeflector().getCurrentActualTargetIndex().equals(indexName)) {
+            if (core.getDeflector().getCurrentActualTargetIndex().equals(indexName)) {
                 LOG.info("Not running retention against current deflector target <{}>.", indexName);
                 continue;
             }
@@ -94,7 +87,7 @@ public class IndexRetentionThread implements Runnable {
              * Never run against a re-opened index. Indices are marked as re-opened by storing a setting
              * attribute and we can check for that here.
              */
-            if (server.getIndexer().indices().isReopened(indexName)) {
+            if (core.getIndexer().indices().isReopened(indexName)) {
                 LOG.info("Not running retention against reopened index <{}>.", indexName);
                 continue;
             }
@@ -102,14 +95,56 @@ public class IndexRetentionThread implements Runnable {
             String msg = "Running retention strategy [" + strategy.getClass().getCanonicalName() + "] " +
                     "for index <" + indexName + ">";
             LOG.info(msg);
-            server.getActivityWriter().write(new Activity(msg, IndexRetentionThread.class));
+            core.getActivityWriter().write(new Activity(msg, IndexRetentionThread.class));
 
             // Sorry if this should ever go mad. Run retention strategy!
             strategy.runStrategy(indexName);
-
-            // Remove index from ranges.
-            IndexRange.destroy(server, indexName);
         }
+
+        // Re-calculate index ranges.
+        try {
+            core.getSystemJobManager().submit(new RebuildIndexRangesJob(core));
+        } catch (SystemJobConcurrencyException e) {
+            String msg = "Could not re-calculate index ranges after running retention: Maximum concurrency of job is reached.";
+            core.getActivityWriter().write(new Activity(msg, IndexRetentionThread.class));
+            LOG.error(msg);
+        }
+    }
+
+    @Override
+    public boolean runsForever() {
+        return false;
+    }
+
+    @Override
+    public boolean stopOnGracefulShutdown() {
+        return true;
+    }
+
+    @Override
+    public boolean masterOnly() {
+        return true;
+    }
+
+    @Override
+    public boolean startOnThisNode() {
+        return core.getConfiguration().performRetention();
+    }
+
+    @Override
+    public boolean isDaemon() {
+        return false;
+    }
+
+    @Override
+    public int getInitialDelaySeconds() {
+        return 0;
+    }
+
+    @Override
+    public int getPeriodSeconds() {
+        // Five minutes.
+        return 300;
     }
 
 }

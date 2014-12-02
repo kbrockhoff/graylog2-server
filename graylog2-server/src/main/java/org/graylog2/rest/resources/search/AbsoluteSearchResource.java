@@ -20,23 +20,30 @@
 package org.graylog2.rest.resources.search;
 
 import com.codahale.metrics.annotation.Timed;
+import org.apache.shiro.authz.annotation.RequiresAuthentication;
+import org.elasticsearch.action.search.SearchPhaseExecutionException;
+import org.glassfish.jersey.server.ChunkedOutput;
 import org.graylog2.indexer.IndexHelper;
 import org.graylog2.indexer.Indexer;
+import org.graylog2.indexer.results.ScrollResult;
+import org.graylog2.indexer.searches.Sorting;
 import org.graylog2.indexer.searches.timeranges.AbsoluteRange;
 import org.graylog2.indexer.searches.timeranges.InvalidRangeParametersException;
 import org.graylog2.indexer.searches.timeranges.TimeRange;
 import org.graylog2.rest.documentation.annotations.*;
 import org.graylog2.rest.resources.search.responses.SearchResponse;
+import org.graylog2.security.RestPermissions;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import javax.ws.rs.*;
 import javax.ws.rs.core.MediaType;
-import java.util.Map;
+import java.util.List;
 
 /**
  * @author Lennart Koopmann <lennart@torch.sh>
  */
+@RequiresAuthentication
 @Api(value = "Search/Absolute", description = "Message search")
 @Path("/search/universal/absolute")
 public class AbsoluteSearchResource extends SearchResource {
@@ -46,8 +53,8 @@ public class AbsoluteSearchResource extends SearchResource {
     @GET @Timed
     @ApiOperation(value = "Message search with absolute timerange.",
             notes = "Search for messages using an absolute timerange, specified as from/to " +
-                    "with format yyyy-MM-dd HH-mm-ss.SSS or yyyy-MM-dd HH-mm-ss.")
-    @Produces({ MediaType.APPLICATION_JSON, "text/csv" })
+                    "with format yyyy-MM-ddTHH:mm:ss.SSSZ (e.g. 2014-01-23T15:34:49.000Z) or yyyy-MM-dd HH-mm-ss.")
+    @Produces(MediaType.APPLICATION_JSON)
     @ApiResponses(value = {
             @ApiResponse(code = 400, message = "Invalid timerange parameters provided.")
     })
@@ -57,19 +64,24 @@ public class AbsoluteSearchResource extends SearchResource {
             @ApiParam(title = "to", description = "Timerange end. See description for date format", required = true) @QueryParam("to") String to,
             @ApiParam(title = "limit", description = "Maximum number of messages to return.", required = false) @QueryParam("limit") int limit,
             @ApiParam(title = "offset", description = "Offset", required = false) @QueryParam("offset") int offset,
-            @ApiParam(title = "filter", description = "Filter", required = false) @QueryParam("filter") String filter) {
+            @ApiParam(title = "filter", description = "Filter", required = false) @QueryParam("filter") String filter,
+            @ApiParam(title = "sort", description = "Sorting (field:asc / field:desc)", required = false) @QueryParam("sort") String sort) {
+        checkSearchPermission(filter, RestPermissions.SEARCHES_ABSOLUTE);
+
         checkQuery(query);
+
+        Sorting sorting = buildSorting(sort);
 
         try {
             SearchResponse searchResponse;
 
             if (filter == null) {
                 searchResponse = buildSearchResponse(
-                        core.getIndexer().searches().search(query, buildAbsoluteTimeRange(from, to), limit, offset)
+                        core.getIndexer().searches().search(query, buildAbsoluteTimeRange(from, to), limit, offset, sorting)
                 );
             } else {
                 searchResponse = buildSearchResponse(
-                        core.getIndexer().searches().search(query, filter, buildAbsoluteTimeRange(from, to), limit, offset)
+                        core.getIndexer().searches().search(query, filter, buildAbsoluteTimeRange(from, to), limit, offset, sorting)
                 );
             }
 
@@ -77,10 +89,51 @@ public class AbsoluteSearchResource extends SearchResource {
         } catch (IndexHelper.InvalidRangeFormatException e) {
             LOG.warn("Invalid timerange parameters provided. Returning HTTP 400.", e);
             throw new WebApplicationException(400);
+        } catch (SearchPhaseExecutionException e) {
+            throw createRequestExceptionForParseFailure(query, e);
         }
     }
 
-    @GET @Path("/terms") @Timed
+    @GET @Timed
+    @ApiOperation(value = "Message search with absolute timerange.",
+                  notes = "Search for messages using an absolute timerange, specified as from/to " +
+                          "with format yyyy-MM-ddTHH:mm:ss.SSSZ (e.g. 2014-01-23T15:34:49.000Z) or yyyy-MM-dd HH-mm-ss.")
+    @Produces("text/csv")
+    @ApiResponses(value = {
+            @ApiResponse(code = 400, message = "Invalid timerange parameters provided.")
+    })
+    public ChunkedOutput<ScrollResult.ScrollChunk> searchAbsoluteChunked(
+            @ApiParam(title = "query", description = "Query (Lucene syntax)", required = true) @QueryParam("query") String query,
+            @ApiParam(title = "from", description = "Timerange start. See description for date format", required = true) @QueryParam("from") String from,
+            @ApiParam(title = "to", description = "Timerange end. See description for date format", required = true) @QueryParam("to") String to,
+            @ApiParam(title = "limit", description = "Maximum number of messages to return.", required = false) @QueryParam("limit") int limit,
+            @ApiParam(title = "offset", description = "Offset", required = false) @QueryParam("offset") int offset,
+            @ApiParam(title = "filter", description = "Filter", required = false) @QueryParam("filter") String filter,
+            @ApiParam(title = "fields", description = "Comma separated list of fields to return", required = true) @QueryParam("fields") String fields) {
+        checkSearchPermission(filter, RestPermissions.SEARCHES_ABSOLUTE);
+
+        checkQuery(query);
+        final List<String> fieldList = parseFields(fields);
+        final TimeRange timeRange = buildAbsoluteTimeRange(from, to);
+
+        try {
+            final ScrollResult scroll = core.getIndexer().searches()
+                    .scroll(query, timeRange, limit, offset, fieldList, filter);
+            final ChunkedOutput<ScrollResult.ScrollChunk> output = new ChunkedOutput<>(ScrollResult.ScrollChunk.class);
+
+            LOG.debug("[{}] Scroll result contains a total of {} messages", scroll.getQueryHash(), scroll.totalHits());
+            Runnable scrollIterationAction = createScrollChunkProducer(scroll, output, limit);
+            // TODO use a shared executor for async responses here instead of a single thread that's not limited
+            new Thread(scrollIterationAction).start();
+            return output;
+        } catch (SearchPhaseExecutionException e) {
+            throw createRequestExceptionForParseFailure(query, e);
+        } catch (IndexHelper.InvalidRangeFormatException e) {
+            throw new BadRequestException(e);
+        }
+    }
+
+        @GET @Path("/terms") @Timed
     @ApiOperation(value = "Most common field terms of a query using an absolute timerange.")
     @ApiResponses(value = {
             @ApiResponse(code = 400, message = "Invalid timerange parameters provided.")
@@ -93,6 +146,8 @@ public class AbsoluteSearchResource extends SearchResource {
             @ApiParam(title = "from", description = "Timerange start. See search method description for date format", required = true) @QueryParam("from") String from,
             @ApiParam(title = "to", description = "Timerange end. See search method description for date format", required = true) @QueryParam("to") String to,
             @ApiParam(title = "filter", description = "Filter", required = false) @QueryParam("filter") String filter) {
+        checkSearchPermission(filter, RestPermissions.SEARCHES_ABSOLUTE);
+
         checkQueryAndField(query, field);
 
         try {
@@ -120,6 +175,8 @@ public class AbsoluteSearchResource extends SearchResource {
             @ApiParam(title = "from", description = "Timerange start. See search method description for date format", required = true) @QueryParam("from") String from,
             @ApiParam(title = "to", description = "Timerange end. See search method description for date format", required = true) @QueryParam("to") String to,
             @ApiParam(title = "filter", description = "Filter", required = false) @QueryParam("filter") String filter) {
+        checkSearchPermission(filter, RestPermissions.SEARCHES_ABSOLUTE);
+
         checkQueryAndField(query, field);
 
         try {
@@ -145,6 +202,8 @@ public class AbsoluteSearchResource extends SearchResource {
             @ApiParam(title = "from", description = "Timerange start. See search method description for date format", required = true) @QueryParam("from") String from,
             @ApiParam(title = "to", description = "Timerange end. See search method description for date format", required = true) @QueryParam("to") String to,
             @ApiParam(title = "filter", description = "Filter", required = false) @QueryParam("filter") String filter) {
+        checkSearchPermission(filter, RestPermissions.SEARCHES_ABSOLUTE);
+
         checkQueryAndInterval(query, interval);
         interval = interval.toUpperCase();
         validateInterval(interval);
@@ -179,6 +238,8 @@ public class AbsoluteSearchResource extends SearchResource {
             @ApiParam(title = "from", description = "Timerange start. See search method description for date format", required = true) @QueryParam("from") String from,
             @ApiParam(title = "to", description = "Timerange end. See search method description for date format", required = true) @QueryParam("to") String to,
             @ApiParam(title = "filter", description = "Filter", required = false) @QueryParam("filter") String filter) {
+        checkSearchPermission(filter, RestPermissions.SEARCHES_ABSOLUTE);
+
         checkQueryAndInterval(query, interval);
         interval = interval.toUpperCase();
         validateInterval(interval);

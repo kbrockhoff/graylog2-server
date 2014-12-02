@@ -5,8 +5,8 @@
 package org.graylog2.indexer;
 
 import org.graylog2.GraylogServerStub;
-import org.junit.Test;
-import static org.junit.Assert.*;
+import org.testng.annotations.Test;
+import static org.testng.AssertJUnit.*;
 
 /**
  *
@@ -28,7 +28,7 @@ public class DeflectorTest {
         assertEquals(52, Deflector.extractIndexNumber("foo_0_bar_52"));
     }
     
-    @Test(expected=NumberFormatException.class)
+    @Test(expectedExceptions=NumberFormatException.class)
     public void testExtractIndexNumberWithMalformedFormatThrowsException() {
         assertEquals(0, Deflector.extractIndexNumber("graylog2_hunderttausend"));
     }
@@ -41,5 +41,9 @@ public class DeflectorTest {
         assertEquals("graylog2_1", d.buildIndexName("graylog2", 1));
         assertEquals("graylog2_9001", d.buildIndexName("graylog2", 9001));
     }
-    
+
+    @Test
+    public void testBuildDeflectorNameWithCustomIndexPrefix() {
+        assertEquals("foo_custom_index_deflector", Deflector.buildName("foo_custom_index"));
+    }
 }

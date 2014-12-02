@@ -23,8 +23,12 @@ import com.beust.jcommander.internal.Lists;
 import com.codahale.metrics.annotation.Timed;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.google.common.collect.Maps;
+import org.apache.shiro.authz.annotation.RequiresAuthentication;
+import org.apache.shiro.authz.annotation.RequiresPermissions;
 import org.bson.types.ObjectId;
+import org.cliffc.high_scale_lib.Counter;
 import org.graylog2.Core;
+import org.graylog2.alerts.AlertCondition;
 import org.graylog2.database.NotFoundException;
 import org.graylog2.database.ValidationException;
 import org.graylog2.plugin.Message;
@@ -33,6 +37,7 @@ import org.graylog2.plugin.streams.StreamRule;
 import org.graylog2.rest.documentation.annotations.*;
 import org.graylog2.rest.resources.RestResource;
 import org.graylog2.rest.resources.streams.requests.CreateRequest;
+import org.graylog2.security.RestPermissions;
 import org.graylog2.streams.StreamImpl;
 import org.graylog2.streams.StreamRouter;
 import org.graylog2.streams.StreamRuleImpl;
@@ -46,12 +51,14 @@ import javax.ws.rs.*;
 import javax.ws.rs.core.MediaType;
 import javax.ws.rs.core.Response;
 import java.io.IOException;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
 /**
  * @author Lennart Koopmann <lennart@torch.sh>
  */
+@RequiresAuthentication
 @Api(value = "Streams", description = "Manage streams")
 @Path("/streams")
 public class StreamResource extends RestResource {
@@ -62,6 +69,7 @@ public class StreamResource extends RestResource {
 
     @POST @Timed
     @ApiOperation(value = "Create a stream")
+    @RequiresPermissions(RestPermissions.STREAMS_CREATE)
     @Consumes(MediaType.APPLICATION_JSON)
     @Produces(MediaType.APPLICATION_JSON)
     public Response create(@ApiParam(title = "JSON body", required = true) String body) {
@@ -77,13 +85,16 @@ public class StreamResource extends RestResource {
         // Create stream.
         Map<String, Object> streamData = Maps.newHashMap();
         streamData.put("title", cr.title);
+        streamData.put("description", cr.description);
         streamData.put("creator_user_id", cr.creatorUserId);
         streamData.put("created_at", new DateTime(DateTimeZone.UTC));
 
         StreamImpl stream = new StreamImpl(streamData, core);
-        ObjectId id;
+        stream.pause();
+        String id;
         try {
-            id = stream.save();
+            stream.save();
+            id = stream.getId();
         } catch (ValidationException e) {
             LOG.error("Validation error.", e);
             throw new WebApplicationException(e, Response.Status.BAD_REQUEST);
@@ -110,7 +121,7 @@ public class StreamResource extends RestResource {
         }
 
         Map<String, Object> result = Maps.newHashMap();
-        result.put("stream_id", id.toStringMongod());
+        result.put("stream_id", id);
 
         return Response.status(Response.Status.CREATED).entity(json(result)).build();
     }
@@ -121,7 +132,9 @@ public class StreamResource extends RestResource {
     public String get() {
         List<Map<String, Object>> streams = Lists.newArrayList();
         for (Stream stream : StreamImpl.loadAll(core)) {
-        	streams.add(((StreamImpl) stream).asMap());
+            if (isPermitted(RestPermissions.STREAMS_READ, stream.getId())) {
+               streams.add(((StreamImpl) stream).asMap());
+            }
         }
         
         Map<String, Object> result = Maps.newHashMap();
@@ -132,12 +145,14 @@ public class StreamResource extends RestResource {
     }
 
     @GET @Path("/enabled") @Timed
-    @ApiOperation(value = "Get a list of all streams")
+    @ApiOperation(value = "Get a list of all enabled streams")
     @Produces(MediaType.APPLICATION_JSON)
     public String getEnabled() {
         List<Map<String, Object>> streams = Lists.newArrayList();
         for (Stream stream : StreamImpl.loadAllEnabled(core)) {
-            streams.add(((StreamImpl) stream).asMap());
+            if (isPermitted(RestPermissions.STREAMS_READ, stream.getId())) {
+                streams.add(((StreamImpl) stream).asMap());
+            }
         }
 
         Map<String, Object> result = Maps.newHashMap();
@@ -159,6 +174,7 @@ public class StreamResource extends RestResource {
         	LOG.error("Missing streamId. Returning HTTP 400.");
         	throw new WebApplicationException(400);
         }
+        checkPermission(RestPermissions.STREAMS_READ, streamId);
 
         StreamImpl stream;
         try {
@@ -168,6 +184,44 @@ public class StreamResource extends RestResource {
         }
 
         return json(stream.asMap());
+    }
+
+    @PUT @Timed
+    @Path("/{streamId}")
+    @ApiOperation(value = "Update a stream")
+    @RequiresPermissions(RestPermissions.STREAMS_EDIT)
+    @Consumes(MediaType.APPLICATION_JSON)
+    @Produces(MediaType.APPLICATION_JSON)
+    @ApiResponses(value = {
+            @ApiResponse(code = 404, message = "Stream not found."),
+            @ApiResponse(code = 400, message = "Invalid ObjectId.")
+    })
+    public Response update(@ApiParam(title = "JSON body", required = true) String body, @ApiParam(title = "streamId", required = true) @PathParam("streamId") String streamId) {
+        checkPermission(RestPermissions.STREAMS_EDIT, streamId);
+
+        CreateRequest cr;
+        try {
+            cr = objectMapper.readValue(body, CreateRequest.class);
+        } catch(IOException e) {
+            LOG.error("Error while parsing JSON", e);
+            throw new WebApplicationException(e, Response.Status.BAD_REQUEST);
+        }
+
+        StreamImpl stream;
+        try {
+            stream = StreamImpl.load(loadObjectId(streamId), core);
+        } catch (NotFoundException e) {
+            throw new WebApplicationException(404);
+        }
+
+        try {
+            stream.update(cr);
+        } catch (ValidationException e) {
+            LOG.error("Validation error.", e);
+            throw new WebApplicationException(e, Response.Status.BAD_REQUEST);
+        }
+
+        return Response.status(Response.Status.OK).build();
     }
 
     @DELETE @Path("/{streamId}") @Timed
@@ -181,7 +235,7 @@ public class StreamResource extends RestResource {
         	LOG.error("Missing streamId. Returning HTTP 400.");
         	throw new WebApplicationException(400);
         }
-
+        checkPermission(RestPermissions.STREAMS_EDIT, streamId);
         try {
         	StreamImpl stream = StreamImpl.load(loadObjectId(streamId), core);
         	stream.destroy();
@@ -203,6 +257,7 @@ public class StreamResource extends RestResource {
             LOG.error("Missing streamId. Returning HTTP 400.");
             throw new WebApplicationException(400);
         }
+        checkPermission(RestPermissions.STREAMS_CHANGESTATE, streamId);
 
         try {
             StreamImpl stream = StreamImpl.load(loadObjectId(streamId), core);
@@ -225,6 +280,7 @@ public class StreamResource extends RestResource {
             LOG.error("Missing streamId. Returning HTTP 400.");
             throw new WebApplicationException(400);
         }
+        checkPermission(RestPermissions.STREAMS_CHANGESTATE, streamId);
 
         try {
             StreamImpl stream = StreamImpl.load(loadObjectId(streamId), core);
@@ -247,6 +303,7 @@ public class StreamResource extends RestResource {
             LOG.error("Missing parameters. Returning HTTP 400.");
             throw new WebApplicationException(400);
         }
+        checkPermission(RestPermissions.STREAMS_READ, streamId);
 
         Map<String, Map<String, Object>> serialisedMessage;
         try {
@@ -270,7 +327,7 @@ public class StreamResource extends RestResource {
         Map<String, Boolean> rules = Maps.newHashMap();
 
         for (StreamRule ruleMatch : ruleMatches.keySet()) {
-            rules.put(ruleMatch.getObjectId().toStringMongod(), ruleMatches.get(ruleMatch));
+            rules.put(ruleMatch.getId(), ruleMatches.get(ruleMatch));
         }
 
         Map<String, Object> result = Maps.newHashMap();
@@ -278,6 +335,125 @@ public class StreamResource extends RestResource {
         result.put("rules", rules);
 
         return json(result);
+    }
+
+    @POST @Path("/{streamId}/clone") @Timed
+    @ApiOperation(value = "Clone a stream")
+    @RequiresPermissions(RestPermissions.STREAMS_CREATE)
+    @ApiResponses(value = {
+            @ApiResponse(code = 404, message = "Stream not found."),
+            @ApiResponse(code = 400, message = "Invalid or missing Stream id.")
+    })
+    @Consumes(MediaType.APPLICATION_JSON)
+    @Produces(MediaType.APPLICATION_JSON)
+    public Response cloneStream(@ApiParam(title = "streamId", required = true) @PathParam("streamId") String streamId,
+                          @ApiParam(title = "JSON body", required = true) String body) {
+        CreateRequest cr;
+
+        try {
+            cr = objectMapper.readValue(body, CreateRequest.class);
+        } catch(IOException e) {
+            LOG.error("Error while parsing JSON", e);
+            throw new WebApplicationException(e, Response.Status.BAD_REQUEST);
+        }
+
+        checkPermission(RestPermissions.STREAMS_CREATE);
+        checkPermission(RestPermissions.STREAMS_READ, streamId);
+
+        StreamImpl sourceStream = fetchStream(streamId);
+
+        // Create stream.
+        Map<String, Object> streamData = Maps.newHashMap();
+        streamData.put("title", cr.title);
+        streamData.put("description", cr.description);
+        streamData.put("creator_user_id", cr.creatorUserId);
+        streamData.put("created_at", new DateTime(DateTimeZone.UTC));
+
+        StreamImpl stream = new StreamImpl(streamData, core);
+        stream.pause();
+        String id;
+        try {
+            stream.save();
+            id = stream.getId();
+        } catch (ValidationException e) {
+            LOG.error("Validation error.", e);
+            throw new WebApplicationException(e, Response.Status.BAD_REQUEST);
+        }
+
+        if (sourceStream.getStreamRules().size() > 0) {
+            for (StreamRule streamRule : sourceStream.getStreamRules()) {
+                Map<String, Object> streamRuleData = Maps.newHashMap();
+
+                streamRuleData.put("type", streamRule.getType().toInteger());
+                streamRuleData.put("field", streamRule.getField());
+                streamRuleData.put("value", streamRule.getValue());
+                streamRuleData.put("inverted", streamRule.getInverted());
+                streamRuleData.put("stream_id", new ObjectId(id));
+
+                StreamRuleImpl newStreamRule = new StreamRuleImpl(streamRuleData, core);
+                try {
+                    newStreamRule.save();
+                } catch (ValidationException e) {
+                    LOG.error("Validation error while trying to clone a stream rule: ", e);
+                    throw new WebApplicationException(e, Response.Status.BAD_REQUEST);
+                }
+            }
+        }
+
+        if (sourceStream.getAlertConditions().size() > 0) {
+            for (AlertCondition alertCondition : sourceStream.getAlertConditions()) {
+                try {
+                    stream.addAlertCondition(alertCondition);
+                } catch (ValidationException e) {
+                    LOG.error("Validation error while trying to clone an alert condition: ", e);
+                    throw new WebApplicationException(e, Response.Status.BAD_REQUEST);
+                }
+            }
+        }
+
+        Map<String, Object> result = Maps.newHashMap();
+        result.put("stream_id", id);
+
+        return Response.status(Response.Status.CREATED).entity(json(result)).build();
+    }
+
+    @GET @Timed
+    @Path("/{streamId}/throughput")
+    @ApiOperation(value = "Current throughput of this stream on this node in messages per second")
+    @Produces(MediaType.APPLICATION_JSON)
+    public Response oneStreamThroughput(@ApiParam(title="streamId", required = true) @PathParam("streamId") String streamId) {
+        Map<String, Long> result = Maps.newHashMap();
+        result.put("throughput", 0L);
+
+        final HashMap<String,Counter> currentStreamThroughput = core.getCurrentStreamThroughput();
+        if (currentStreamThroughput != null) {
+            final Counter counter = currentStreamThroughput.get(streamId);
+            if (counter != null && isPermitted(RestPermissions.STREAMS_READ, streamId)) {
+                result.put("throughput", counter.get());
+            }
+        }
+        return Response.ok().entity(json(result)).build();
+    }
+
+    @GET @Timed
+    @Path("/throughput")
+    @ApiOperation("Current throughput of all visible streams on this node in messages per second")
+    @Produces(MediaType.APPLICATION_JSON)
+    public Response streamThroughput() {
+        Map<String, Map<String, Long>> result = Maps.newHashMap();
+        final Map<String, Long> perStream = Maps.newHashMap();
+        result.put("throughput", perStream);
+
+        final HashMap<String,Counter> currentStreamThroughput = core.getCurrentStreamThroughput();
+        if (currentStreamThroughput != null) {
+            for (Map.Entry<String, Counter> entry : currentStreamThroughput.entrySet()) {
+                if (entry.getValue() != null && isPermitted(RestPermissions.STREAMS_READ, entry.getKey())) {
+                    perStream.put(entry.getKey(), entry.getValue().get());
+                }
+            }
+
+        }
+        return Response.ok().entity(json(result)).build();
     }
 
     protected StreamImpl fetchStream(String streamId) {

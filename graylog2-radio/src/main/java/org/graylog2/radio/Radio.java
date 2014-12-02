@@ -33,9 +33,9 @@ import org.graylog2.inputs.Cache;
 import org.graylog2.inputs.gelf.gelf.GELFChunkManager;
 import org.graylog2.jersey.container.netty.NettyContainer;
 import org.graylog2.plugin.InputHost;
-import org.graylog2.plugin.Tools;
 import org.graylog2.plugin.Version;
 import org.graylog2.plugin.buffers.Buffer;
+import org.graylog2.plugin.lifecycles.Lifecycle;
 import org.graylog2.plugin.rest.AnyExceptionClassMapper;
 import org.graylog2.plugin.system.NodeId;
 import org.graylog2.radio.buffers.ProcessBuffer;
@@ -44,6 +44,7 @@ import org.graylog2.radio.inputs.InputRegistry;
 import org.graylog2.radio.periodical.MasterCacheWorkerThread;
 import org.graylog2.radio.periodical.ThroughputCounterManagerThread;
 import org.graylog2.radio.transports.RadioTransport;
+import org.graylog2.radio.transports.amqp.AMQPProducer;
 import org.graylog2.radio.transports.kafka.KafkaProducer;
 import org.jboss.netty.bootstrap.ServerBootstrap;
 import org.jboss.netty.channel.ChannelPipeline;
@@ -70,6 +71,8 @@ public class Radio implements InputHost {
     private static final Logger LOG = LoggerFactory.getLogger(Radio.class);
 
     public static final Version VERSION = RadioVersion.VERSION;
+
+    private Lifecycle lifecycle = Lifecycle.UNINITIALIZED;
 
     private DateTime startedAt;
     private MetricRegistry metricRegistry;
@@ -118,22 +121,23 @@ public class Radio implements InputHost {
         processBuffer = new ProcessBuffer(this, inputCache);
         processBuffer.initialize();
 
-        transport = new KafkaProducer(this);
+        // Set up transport.
+        switch (configuration.getTransportType()) {
+            case AMQP:
+                transport = new AMQPProducer(this);
+                break;
+            case KAFKA:
+                transport = new KafkaProducer(this);
+                break;
+            default:
+                throw new RuntimeException("Cannot map transport type to transport.");
+        }
 
         this.inputs = new InputRegistry(this);
 
         if (this.configuration.getRestTransportUri() == null) {
-            String guessedIf;
-            try {
-                guessedIf = Tools.guessPrimaryNetworkAddress().getHostAddress();
-            } catch (Exception e) {
-                LOG.error("Could not guess primary network address for rest_transport_uri. Please configure it in your graylog2-radio.conf.", e);
-                throw new RuntimeException("No rest_transport_uri.");
-            }
-
-            String transportStr = "http://" + guessedIf + ":" + configuration.getRestListenUri().getPort();
-            LOG.info("No rest_transport_uri set. Falling back to [{}].", transportStr);
-            this.configuration.setRestTransportUri(transportStr);
+            this.configuration.setRestTransportUri(configuration.getDefaultRestTransportUri().toString());
+            LOG.info("No rest_transport_uri set. Falling back to [{}].", configuration.getRestTransportUri().toString());
         }
 
         pinger = new Ping.Pinger(httpClient, nodeId, configuration.getRestTransportUri(), configuration.getGraylog2ServerUri());
@@ -150,7 +154,7 @@ public class Radio implements InputHost {
     }
 
     public void launchPersistedInputs() throws InterruptedException, ExecutionException, IOException {
-        inputs.launchPersisted();
+        inputs.launchAllPersisted();
     }
 
     public void startRestApi() throws IOException {
@@ -189,7 +193,10 @@ public class Radio implements InputHost {
         bootstrap.setOption("child.tcpNoDelay", true);
         bootstrap.setOption("child.keepAlive", true);
 
-        bootstrap.bind(new InetSocketAddress(configuration.getRestListenUri().getPort()));
+        bootstrap.bind(new InetSocketAddress(
+                configuration.getRestListenUri().getHost(),
+                configuration.getRestListenUri().getPort()
+        ));
         Runtime.getRuntime().addShutdownHook(new Thread() {
             @Override
             public void run() {
@@ -281,4 +288,13 @@ public class Radio implements InputHost {
     public AsyncHttpClient getHttpClient() {
         return httpClient;
     }
+
+    public Lifecycle getLifecycle() {
+        return lifecycle;
+    }
+
+    public void setLifecycle(Lifecycle lifecycle) {
+        this.lifecycle = lifecycle;
+    }
+
 }

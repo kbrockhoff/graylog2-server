@@ -20,7 +20,7 @@
 package org.graylog2.inputs.converters;
 
 import org.graylog2.plugin.inputs.Converter;
-import org.junit.Test;
+import org.testng.annotations.Test;
 
 import java.util.HashMap;
 
@@ -40,6 +40,8 @@ public class NumericConverterTest {
         assertEquals("", hc.convert(""));
         assertEquals("lol no number", hc.convert("lol no number"));
         assertEquals(9001, hc.convert("9001"));
+        assertEquals(2147483648L, hc.convert("2147483648"));
+        assertEquals(10.4D, hc.convert("10.4"));
         assertEquals(Integer.class, hc.convert("4").getClass());
     }
 

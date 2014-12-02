@@ -42,7 +42,7 @@ import java.util.concurrent.Executors;
  */
 public class RawTCPInput extends RawInputBase {
 
-    private static final Logger LOG = LoggerFactory.getLogger(RawUDPInput.class);
+    private static final Logger LOG = LoggerFactory.getLogger(RawTCPInput.class);
 
     public static final String NAME = "Raw/Plaintext TCP";
 
@@ -61,12 +61,12 @@ public class RawTCPInput extends RawInputBase {
 
         final ExecutorService bossThreadPool = Executors.newCachedThreadPool(
                 new ThreadFactoryBuilder()
-                        .setNameFormat("input-" + inputId + "-rawtcp-boss-%d")
+                        .setNameFormat("input-" + getId() + "-rawtcp-boss-%d")
                         .build());
 
         final ExecutorService workerThreadPool = Executors.newCachedThreadPool(
                 new ThreadFactoryBuilder()
-                        .setNameFormat("input-" + inputId + "-rawtcp-worker-%d")
+                        .setNameFormat("input-" + getId() + "-rawtcp-worker-%d")
                         .build());
 
         bootstrap = new ServerBootstrap(
@@ -74,6 +74,7 @@ public class RawTCPInput extends RawInputBase {
         );
 
         bootstrap.setPipelineFactory(new RawTCPPipelineFactory(graylogServer, configuration, this, throughputCounter, connectionCounter));
+        bootstrap.setOption("child.receiveBufferSize", getRecvBufferSize());
 
         try {
             channel = ((ServerBootstrap) bootstrap).bind(socketAddress);
