@@ -1,6 +1,4 @@
-/*
- * Copyright 2013 TORCH GmbH
- *
+/**
  * This file is part of Graylog2.
  *
  * Graylog2 is free software: you can redistribute it and/or modify
@@ -18,69 +16,37 @@
  */
 package org.graylog2.security;
 
-import com.google.common.collect.Lists;
-import com.mongodb.BasicDBObject;
-import com.mongodb.DBObject;
 import org.bson.types.ObjectId;
-import org.graylog2.Core;
-import org.graylog2.database.Persisted;
-import org.graylog2.database.validators.Validator;
+import org.graylog2.database.CollectionName;
+import org.graylog2.database.PersistedImpl;
+import org.graylog2.plugin.database.validators.Validator;
 import org.joda.time.DateTime;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.*;
-import java.util.Collection;
 import java.util.Date;
-import java.util.List;
 import java.util.Map;
 
-public class MongoDbSession extends Persisted {
-    private static final Logger log = LoggerFactory.getLogger(MongoDbSession.class);
+@CollectionName("sessions")
+public class MongoDbSession extends PersistedImpl {
+    private static final Logger LOG = LoggerFactory.getLogger(MongoDbSession.class);
 
-    protected MongoDbSession(Core core, Map<String, Object> fields) {
-        super(core, fields);
+    protected MongoDbSession(Map<String, Object> fields) {
+        super(fields);
     }
 
-    public MongoDbSession(ObjectId objectId, Map map, Core core) {
-        super(core, objectId, map);
-    }
-
-    public static MongoDbSession load(String sessionId, Core core) {
-        DBObject query = new BasicDBObject();
-        query.put("session_id", sessionId);
-
-        DBObject result = findOne(query, core, "sessions");
-        if (result == null) {
-            return null;
-        }
-        final Object objectId = result.get("_id");
-        return new MongoDbSession((ObjectId) objectId, result.toMap(), core);
-    }
-
-    public static Collection<MongoDbSession> loadAll(Core core) {
-        DBObject query = new BasicDBObject();
-        List<MongoDbSession> dbSessions = Lists.newArrayList();
-        final List<DBObject> sessions = query(query, core, "sessions");
-        for (DBObject session : sessions) {
-            dbSessions.add(new MongoDbSession((ObjectId) session.get("_id"), session.toMap(), core));
-        }
-
-        return dbSessions;
+    public MongoDbSession(ObjectId objectId, Map map) {
+        super(objectId, map);
     }
 
     @Override
-    public String getCollectionName() {
-        return "sessions";
-    }
-
-    @Override
-    protected Map<String, Validator> getValidations() {
+    public Map<String, Validator> getValidations() {
         return null;
     }
 
     @Override
-    protected Map<String, Validator> getEmbeddedValidations(String key) {
+    public Map<String, Validator> getEmbeddedValidations(String key) {
         return null;
     }
 
@@ -96,9 +62,9 @@ public class MongoDbSession extends Persisted {
             final Object o = ois.readObject();
             return (Map<Object, Object>) o;
         } catch (IOException e) {
-            log.error("little io. wow.", e);
+            LOG.error("little io. wow.", e);
         } catch (ClassNotFoundException e) {
-            log.error("wrong thingy in db", e);
+            LOG.error("wrong thingy in db", e);
         }
         return null;
     }
@@ -112,7 +78,7 @@ public class MongoDbSession extends Persisted {
             oos.close();
             fields.put("attributes", bos.toByteArray());
         } catch (IOException e) {
-            log.error("too bad :(", e);
+            LOG.error("too bad :(", e);
         }
     }
 

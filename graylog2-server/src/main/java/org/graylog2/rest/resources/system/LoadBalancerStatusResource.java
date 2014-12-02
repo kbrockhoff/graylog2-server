@@ -1,6 +1,4 @@
 /**
- * Copyright 2014 Lennart Koopmann <lennart@torch.sh>
- *
  * This file is part of Graylog2.
  *
  * Graylog2 is free software: you can redistribute it and/or modify
@@ -15,28 +13,28 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with Graylog2.  If not, see <http://www.gnu.org/licenses/>.
- *
  */
 package org.graylog2.rest.resources.system;
 
 import com.codahale.metrics.annotation.Timed;
 import org.apache.shiro.authz.annotation.RequiresAuthentication;
 import org.apache.shiro.authz.annotation.RequiresPermissions;
-import org.graylog2.plugin.lifecycles.Lifecycle;
 import org.graylog2.plugin.lifecycles.LoadBalancerStatus;
-import org.graylog2.rest.documentation.annotations.Api;
-import org.graylog2.rest.documentation.annotations.ApiOperation;
-import org.graylog2.rest.documentation.annotations.ApiParam;
+import com.wordnik.swagger.annotations.Api;
+import com.wordnik.swagger.annotations.ApiOperation;
+import com.wordnik.swagger.annotations.ApiParam;
 import org.graylog2.rest.resources.RestResource;
 import org.graylog2.security.RestPermissions;
 
-import javax.ws.rs.*;
+import javax.ws.rs.GET;
+import javax.ws.rs.PUT;
+import javax.ws.rs.Path;
+import javax.ws.rs.PathParam;
+import javax.ws.rs.Produces;
+import javax.ws.rs.WebApplicationException;
 import javax.ws.rs.core.MediaType;
 import javax.ws.rs.core.Response;
 
-/**
- * @author Lennart Koopmann <lennart@torch.sh>
- */
 @Api(value = "System/LoadBalancers", description = "Status propagation for load balancers")
 @Path("/system/lbstatus")
 public class LoadBalancerStatusResource extends RestResource{
@@ -48,17 +46,17 @@ public class LoadBalancerStatusResource extends RestResource{
      */
 
     @GET @Timed
+    @Produces(MediaType.TEXT_PLAIN)
     @ApiOperation(value = "Get status of this graylog2-server node for load balancers. " +
             "Returns either ALIVE with HTTP 200 or DEAD with HTTP 503.")
     public Response status() {
-        LoadBalancerStatus lbStatus = core.getLifecycle().getLoadbalancerStatus();
+        final LoadBalancerStatus lbStatus = serverStatus.getLifecycle().getLoadbalancerStatus();
 
-        Response.Status status = lbStatus.equals(LoadBalancerStatus.ALIVE)
+        Response.Status status = lbStatus == LoadBalancerStatus.ALIVE
                 ? Response.Status.OK : Response.Status.SERVICE_UNAVAILABLE;
 
         return Response.status(status)
                 .entity(lbStatus.toString().toUpperCase())
-                .type(MediaType.TEXT_PLAIN)
                 .build();
     }
 
@@ -69,24 +67,23 @@ public class LoadBalancerStatusResource extends RestResource{
     @ApiOperation(value = "Override load balancer status of this graylog2-server node. Next lifecycle " +
             "change will override it again to its default. Set to ALIVE or DEAD.")
     @Path("/override/{status}")
-    public Response override(@ApiParam(title = "status") @PathParam("status") String status) {
-        LoadBalancerStatus lbStatus;
+    public Response override(@ApiParam(name = "status") @PathParam("status") String status) {
+        final LoadBalancerStatus lbStatus;
         try {
             lbStatus = LoadBalancerStatus.valueOf(status.toUpperCase());
         } catch(IllegalArgumentException e) {
-            throw new WebApplicationException(Response.Status.BAD_REQUEST);
+            throw new WebApplicationException(e, Response.Status.BAD_REQUEST);
         }
 
         switch (lbStatus) {
             case DEAD:
-                core.setLifecycle(Lifecycle.OVERRIDE_LB_DEAD);
+                serverStatus.overrideLoadBalancerDead();
                 break;
             case ALIVE:
-                core.setLifecycle(Lifecycle.OVERRIDE_LB_ALIVE);
+                serverStatus.overrideLoadBalancerAlive();
                 break;
         }
 
-        return Response.status(Response.Status.OK).build();
+        return Response.ok().build();
     }
-
 }

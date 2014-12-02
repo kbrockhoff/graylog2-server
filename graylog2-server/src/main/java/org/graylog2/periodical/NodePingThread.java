@@ -1,6 +1,4 @@
 /**
- * Copyright 2013 Lennart Koopmann <lennart@torch.sh>
- *
  * This file is part of Graylog2.
  *
  * Graylog2 is free software: you can redistribute it and/or modify
@@ -15,15 +13,21 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with Graylog2.  If not, see <http://www.gnu.org/licenses/>.
- *
  */
 package org.graylog2.periodical;
 
+import com.google.inject.Inject;
+import org.graylog2.Configuration;
 import org.graylog2.cluster.Node;
 import org.graylog2.cluster.NodeNotFoundException;
+import org.graylog2.cluster.NodeService;
 import org.graylog2.notifications.Notification;
-import org.graylog2.system.activities.Activity;
-import org.graylog2.system.activities.ActivityWriter;
+import org.graylog2.notifications.NotificationImpl;
+import org.graylog2.notifications.NotificationService;
+import org.graylog2.plugin.periodical.Periodical;
+import org.graylog2.plugin.ServerStatus;
+import org.graylog2.shared.system.activities.Activity;
+import org.graylog2.shared.system.activities.ActivityWriter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -33,55 +37,65 @@ import org.slf4j.LoggerFactory;
 public class NodePingThread extends Periodical {
 
     private static final Logger LOG = LoggerFactory.getLogger(NodePingThread.class);
+    private final NodeService nodeService;
+    private final NotificationService notificationService;
+    private final ActivityWriter activityWriter;
+    private final Configuration configuration;
+    private final ServerStatus serverStatus;
+
+    @Inject
+    public NodePingThread(NodeService nodeService,
+                          NotificationService notificationService,
+                          ActivityWriter activityWriter,
+                          Configuration configuration,
+                          ServerStatus serverStatus) {
+        this.nodeService = nodeService;
+        this.notificationService = notificationService;
+        this.activityWriter = activityWriter;
+        this.configuration = configuration;
+        this.serverStatus = serverStatus;
+    }
 
     @Override
-    public void run() {
+    public void doRun() {
+        final boolean isMaster = serverStatus.hasCapability(ServerStatus.Capability.MASTER);
         try {
-            Node.thisNode(core).markAsAlive(core.isMaster(), core.getConfiguration().getRestTransportUri());
+            Node node = nodeService.byNodeId(serverStatus.getNodeId());
+            nodeService.markAsAlive(node, isMaster, configuration.getRestTransportUri());
         } catch (NodeNotFoundException e) {
             LOG.warn("Did not find meta info of this node. Re-registering.");
-            Node.registerServer(core, core.isMaster(), core.getConfiguration().getRestTransportUri());
+            nodeService.registerServer(serverStatus.getNodeId().toString(), isMaster, configuration.getRestTransportUri());
         }
         try {
             // Remove old nodes that are no longer running. (Just some housekeeping)
-            Node.dropOutdated(core);
+            nodeService.dropOutdated();
 
-            final ActivityWriter activityWriter = core.getActivityWriter();
-            try {
-                // Check that we still have a master node in the cluster, if not, warn the user.
-                if (Node.thisNode(core).isAnyMasterPresent()) {
-                    boolean removedNotification = Notification.build(core)
-                            .addType(Notification.Type.NO_MASTER)
-                            .fixed();
-                    if (removedNotification) {
-                        activityWriter.write(
-                            new Activity("Notification condition [" + Notification.Type.NO_MASTER + "] " +
-                                                 "has been fixed.", NodePingThread.class));
-                    }
-                } else {
-                    Notification.buildNow(core)
-                            .addThisNode()
-                            .addType(Notification.Type.NO_MASTER)
-                            .addSeverity(Notification.Severity.URGENT)
-                            .publishIfFirst();
+            // Check that we still have a master node in the cluster, if not, warn the user.
+            if (nodeService.isAnyMasterPresent()) {
+                Notification notification = notificationService.build()
+                        .addType(Notification.Type.NO_MASTER);
+                boolean removedNotification = notificationService.fixed(notification);
+                if (removedNotification) {
+                    activityWriter.write(
+                        new Activity("Notification condition [" + NotificationImpl.Type.NO_MASTER + "] " +
+                                             "has been fixed.", NodePingThread.class));
                 }
-            } catch (NodeNotFoundException e) {
-                LOG.debug("Our node has immediately been purged again. This should not happen and indicates a clock skew.");
-                /*Notification.buildNow(core)
-                        .addThisNode()
-                        .addType(Notification.Type.CHECK_SERVER_CLOCKS)
-                        .addSeverity(Notification.Severity.URGENT)
-                        .publishIfFirst();
-                activityWriter.write(
-                        new Activity("This graylog2 server node (" + core.getNodeId() + ") was immediately purged, " +
-                                             "clock skew on other graylog2-server node is likely. Check your system clocks.",
-                                     NodePingThread.class));
-                */
-                // Removed for now. https://github.com/Graylog2/graylog2-web-interface/issues/625
+            } else {
+                Notification notification = notificationService.buildNow()
+                        .addNode(serverStatus.getNodeId().toString())
+                        .addType(Notification.Type.NO_MASTER)
+                        .addSeverity(Notification.Severity.URGENT);
+                notificationService.publishIfFirst(notification);
             }
+
         } catch (Exception e) {
             LOG.warn("Caught exception during node ping.", e);
         }
+    }
+
+    @Override
+    protected Logger getLogger() {
+        return LOG;
     }
 
     @Override

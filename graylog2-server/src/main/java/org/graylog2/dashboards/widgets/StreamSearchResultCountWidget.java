@@ -1,6 +1,4 @@
 /**
- * Copyright 2013 Lennart Koopmann <lennart@torch.sh>
- *
  * This file is part of Graylog2.
  *
  * Graylog2 is free software: you can redistribute it and/or modify
@@ -15,34 +13,35 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with Graylog2.  If not, see <http://www.gnu.org/licenses/>.
- *
  */
 package org.graylog2.dashboards.widgets;
 
-import org.graylog2.Core;
+import com.codahale.metrics.MetricRegistry;
+import com.google.common.collect.ImmutableMap;
 import org.graylog2.indexer.IndexHelper;
 import org.graylog2.indexer.results.CountResult;
+import org.graylog2.indexer.searches.Searches;
 import org.graylog2.indexer.searches.timeranges.TimeRange;
 
-import java.util.HashMap;
+import javax.annotation.Nullable;
 import java.util.Map;
 
-/**
- * @author Lennart Koopmann <lennart@torch.sh>
- */
+import static com.google.common.base.Strings.isNullOrEmpty;
+
 public class StreamSearchResultCountWidget extends DashboardWidget {
 
-    private final Core core;
     private final String query;
     private final TimeRange timeRange;
+    @Nullable
     private final String streamId;
+    private final Searches searches;
 
-    public StreamSearchResultCountWidget(Core core, String id, String description, int cacheTime, Map<String, Object> config, String query, TimeRange timeRange, String creatorUserId) {
-        super(core, DashboardWidget.Type.STREAM_SEARCH_RESULT_COUNT, id, description, cacheTime, config, creatorUserId);
+    public StreamSearchResultCountWidget(MetricRegistry metricRegistry, Searches searches, String id, String description, int cacheTime, Map<String, Object> config, String query, TimeRange timeRange, String creatorUserId) {
+        super(metricRegistry, DashboardWidget.Type.STREAM_SEARCH_RESULT_COUNT, id, description, cacheTime, config, creatorUserId);
+        this.searches = searches;
 
         this.query = query;
         this.timeRange = timeRange;
-        this.core = core;
         this.streamId = (String) config.get("stream_id");
     }
 
@@ -56,21 +55,29 @@ public class StreamSearchResultCountWidget extends DashboardWidget {
 
     @Override
     public Map<String, Object> getPersistedConfig() {
-        return new HashMap<String, Object>() {{
-            put("query", query);
-            put("timerange", timeRange.getPersistedConfig());
-            put("stream_id", streamId);
-        }};
+        final ImmutableMap.Builder<String, Object> persistedConfig = ImmutableMap.<String, Object>builder()
+                .put("query", query)
+                .put("timerange", timeRange.getPersistedConfig());
+
+        if (!isNullOrEmpty(streamId)) {
+            persistedConfig.put("stream_id", streamId);
+        }
+
+        return persistedConfig.build();
     }
 
     @Override
     protected ComputationResult compute() {
+        String filter = null;
+        if (!isNullOrEmpty(streamId)) {
+            filter = "streams:" + streamId;
+        }
+
         try {
-            CountResult cr = core.getIndexer().searches().count(query, timeRange, "streams:" + streamId);
+            CountResult cr = searches.count(query, timeRange, filter);
             return new ComputationResult(cr.getCount(), cr.getTookMs());
         } catch (IndexHelper.InvalidRangeFormatException e) {
             throw new RuntimeException("Invalid timerange format.", e);
         }
     }
-
 }

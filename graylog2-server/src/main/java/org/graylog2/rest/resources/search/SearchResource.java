@@ -1,6 +1,4 @@
 /**
- * Copyright 2013 Lennart Koopmann <lennart@socketfeed.com>
- *
  * This file is part of Graylog2.
  *
  * Graylog2 is free software: you can redistribute it and/or modify
@@ -15,9 +13,7 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with Graylog2.  If not, see <http://www.gnu.org/licenses/>.
- *
  */
-
 package org.graylog2.rest.resources.search;
 
 import com.google.common.base.Splitter;
@@ -31,7 +27,6 @@ import org.elasticsearch.action.search.ShardSearchFailure;
 import org.elasticsearch.search.SearchParseException;
 import org.glassfish.jersey.server.ChunkedOutput;
 import org.graylog2.indexer.IndexHelper;
-import org.graylog2.indexer.Indexer;
 import org.graylog2.indexer.results.*;
 import org.graylog2.indexer.searches.Searches;
 import org.graylog2.indexer.searches.Sorting;
@@ -44,6 +39,7 @@ import org.graylog2.security.RestPermissions;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javax.inject.Inject;
 import javax.ws.rs.BadRequestException;
 import javax.ws.rs.ForbiddenException;
 import javax.ws.rs.WebApplicationException;
@@ -58,10 +54,16 @@ import java.util.Map;
  */
 public class SearchResource extends RestResource {
     private static final Logger LOG = LoggerFactory.getLogger(SearchResource.class);
+    protected final Searches searches;
+
+    @Inject
+    public SearchResource(Searches searches) {
+        this.searches = searches;
+    }
 
     protected void validateInterval(String interval) {
         try {
-            Indexer.DateHistogramInterval.valueOf(interval);
+            Searches.DateHistogramInterval.valueOf(interval);
         } catch (IllegalArgumentException e) {
             LOG.warn("Invalid interval type. Returning HTTP 400.");
             throw new WebApplicationException(400);
@@ -89,6 +91,13 @@ public class SearchResource extends RestResource {
         }
     }
 
+    protected void checkTermsStatsFields(String keyField, String valueField, String order) {
+        if (keyField == null || keyField.isEmpty() || valueField == null || valueField.isEmpty() || order == null || order.isEmpty()) {
+            LOG.warn("Missing parameters. Returning HTTP 400.");
+            throw new WebApplicationException(400);
+        }
+    }
+
     protected void checkQueryAndInterval(String query, String interval) {
         if (query == null || query.isEmpty() || interval == null || interval.isEmpty()) {
             LOG.warn("Missing parameters. Returning HTTP 400.");
@@ -108,11 +117,18 @@ public class SearchResource extends RestResource {
             LOG.warn("Missing fields parameter. Returning HTTP 400");
             throw new BadRequestException("Missing required parameter `fields`");
         }
+        return parseOptionalFields(fields);
+    }
+
+    protected List<String> parseOptionalFields(String fields) {
+        if (fields == null || fields.isEmpty()) {
+            return null;
+        }
         final Iterable<String> split = Splitter.on(',').omitEmptyStrings().trimResults().split(fields);
-        final ArrayList<String> fieldList = Lists.newArrayList("timestamp", "source");
-        // skip the mandatory fields timestamp and source
+        final ArrayList<String> fieldList = Lists.newArrayList("timestamp");
+        // skip the mandatory field timestamp
         for (String field : split) {
-            if ("timestamp".equals(field) || "source".equals(field)) {
+            if ("timestamp".equals(field)) {
                 continue;
             }
             fieldList.add(field);
@@ -127,7 +143,7 @@ public class SearchResource extends RestResource {
 
     protected FieldStatsResult fieldStats(String field, String query, String filter, TimeRange timeRange) throws IndexHelper.InvalidRangeFormatException {
         try {
-            return core.getIndexer().searches().fieldStats(field, query, filter, timeRange);
+            return searches.fieldStats(field, query, filter, timeRange);
         } catch(Searches.FieldTypeException e) {
             LOG.error("Stats query failed. Make sure that field [{}] is a numeric type.", field);
             throw new WebApplicationException(400);
@@ -136,10 +152,10 @@ public class SearchResource extends RestResource {
 
     protected HistogramResult fieldHistogram(String field, String query, String interval, String filter, TimeRange timeRange) throws IndexHelper.InvalidRangeFormatException {
         try {
-            return core.getIndexer().searches().fieldHistogram(
+            return searches.fieldHistogram(
                     query,
                     field,
-                    Indexer.DateHistogramInterval.valueOf(interval),
+                    Searches.DateHistogramInterval.valueOf(interval),
                     filter,
                     timeRange
             );
@@ -161,7 +177,16 @@ public class SearchResource extends RestResource {
         return result;
     }
 
-    protected SearchResponse buildSearchResponse(SearchResult sr) {
+    protected Map<String, Object> buildTermsStatsResult(TermsStatsResult tr) {
+        Map<String, Object> result = Maps.newHashMap();
+        result.put("time", tr.took().millis());
+        result.put("terms", tr.getResults());
+        result.put("built_query", tr.getBuiltQuery());
+
+        return result;
+    }
+
+    protected SearchResponse buildSearchResponse(SearchResult sr, TimeRange timeRange) {
         SearchResponse result = new SearchResponse();
         result.query = sr.getOriginalQuery();
         result.builtQuery = sr.getBuiltQuery();
@@ -170,6 +195,8 @@ public class SearchResource extends RestResource {
         result.fields = sr.getFields();
         result.time = sr.took().millis();
         result.totalResults = sr.getTotalResults();
+        result.from = timeRange.getFrom();
+        result.to = timeRange.getTo();
 
         return result;
     }
@@ -196,6 +223,7 @@ public class SearchResource extends RestResource {
         result.put("results", histogram.getResults());
         result.put("time", histogram.took().millis());
         result.put("built_query", histogram.getBuiltQuery());
+        result.put("queried_timerange", histogram.getHistogramBoundaries().getLimits());
 
         return result;
     }

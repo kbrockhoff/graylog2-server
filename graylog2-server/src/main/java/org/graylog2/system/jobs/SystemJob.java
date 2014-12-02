@@ -1,6 +1,4 @@
 /**
- * Copyright 2013 Lennart Koopmann <lennart@torch.sh>
- *
  * This file is part of Graylog2.
  *
  * Graylog2 is free software: you can redistribute it and/or modify
@@ -15,21 +13,19 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with Graylog2.  If not, see <http://www.gnu.org/licenses/>.
- *
  */
 package org.graylog2.system.jobs;
 
-import org.graylog2.Core;
+import com.google.common.collect.ImmutableMap;
+import org.graylog2.plugin.ServerStatus;
 import org.graylog2.plugin.Tools;
 import org.joda.time.DateTime;
 
-import java.util.HashMap;
 import java.util.Map;
 
-/**
- * @author Lennart Koopmann <lennart@torch.sh>
- */
 public abstract class SystemJob {
+
+    private final ServerStatus serverStatus;
 
     // Known types that can be resolved in the SystemJobFactory.
     public enum Type {
@@ -38,18 +34,32 @@ public abstract class SystemJob {
     }
 
     public abstract void execute();
+
     public abstract void requestCancel();
+
     public abstract int getProgress();
+
     public abstract int maxConcurrency();
 
     public abstract boolean providesProgress();
+
     public abstract boolean isCancelable();
+
     public abstract String getDescription();
+
     public abstract String getClassName();
 
-    protected Core core;
+    //protected Core core;
     protected String id;
     protected DateTime startedAt;
+
+    protected SystemJob(ServerStatus serverStatus) {
+        this.serverStatus = serverStatus;
+    }
+
+    protected SystemJob() {
+        this.serverStatus = null;
+    }
 
     public String getId() {
         if (id == null) {
@@ -64,7 +74,7 @@ public abstract class SystemJob {
     }
 
     public void markStarted() {
-        startedAt = DateTime.now();
+        startedAt = Tools.iso8601();
     }
 
     public DateTime getStartedAt() {
@@ -72,16 +82,16 @@ public abstract class SystemJob {
     }
 
     public Map<String, Object> toMap() {
-        return new HashMap<String, Object>() {{
-            put("id", id);
-            put("name", getClassName()); // getting the concrete class, not this abstract one
-            put("description", getDescription());
-            put("started_at", Tools.getISO8601String(getStartedAt()));
-            put("percent_complete", getProgress());
-            put("provides_progress", providesProgress());
-            put("is_cancelable", isCancelable());
-            put("node_id", core.getNodeId());
-        }};
+        return ImmutableMap.<String, Object>builder()
+                .put("id", id)
+                .put("name", getClassName()) // getting the concrete class, not this abstract one
+                .put("description", getDescription())
+                .put("started_at", Tools.getISO8601String(getStartedAt()))
+                .put("percent_complete", getProgress())
+                .put("provides_progress", providesProgress())
+                .put("is_cancelable", isCancelable())
+                .put("node_id", serverStatus.getNodeId().toString())
+                .build();
     }
 
 }

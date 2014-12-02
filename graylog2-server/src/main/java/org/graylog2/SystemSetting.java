@@ -1,6 +1,4 @@
 /**
- * Copyright 2012 Lennart Koopmann <lennart@socketfeed.com>
- *
  * This file is part of Graylog2.
  *
  * Graylog2 is free software: you can redistribute it and/or modify
@@ -15,7 +13,6 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with Graylog2.  If not, see <http://www.gnu.org/licenses/>.
- *
  */
 package org.graylog2;
 
@@ -23,18 +20,18 @@ import com.mongodb.BasicDBList;
 import com.mongodb.BasicDBObject;
 import com.mongodb.DBCollection;
 import com.mongodb.DBObject;
+import org.graylog2.database.MongoConnection;
+import org.graylog2.database.PersistedServiceImpl;
 
 /**
  *  @author Lennart Koopmann <lennart@socketfeed.com>
  */
-public class SystemSetting {
+public class SystemSetting extends PersistedServiceImpl {
     
     private static final String COLLECTION_NAME = "system_settings";
 
-    private Core server;
-    
-    public SystemSetting(Core server) {
-        this.server = server;
+    public SystemSetting(MongoConnection mongoConnection) {
+        super(mongoConnection);
     }
     
     public boolean getBoolean(String key) {
@@ -66,7 +63,7 @@ public class SystemSetting {
     }
 
     private DBCollection getCollection() {
-        return server.getMongoConnection().getDatabase().getCollection(COLLECTION_NAME);
+        return mongoConnection.getDatabase().getCollection(COLLECTION_NAME);
     }
     
 }

@@ -1,36 +1,36 @@
 /**
- * Copyright (c) 2013 Lennart Koopmann <lennart@socketfeed.com>
+ * The MIT License
+ * Copyright (c) 2012 TORCH GmbH
  *
- * Permission is hereby granted, free of charge, to any person obtaining a copy of
- * this software and associated documentation files (the "Software"), to deal in
- * the Software without restriction, including without limitation the rights to
- * use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies
- * of the Software, and to permit persons to whom the Software is furnished to do
- * so, subject to the following conditions:
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
  *
- * The above copyright notice and this permission notice shall be included in all
- * copies or substantial portions of the Software.
+ * The above copyright notice and this permission notice shall be included in
+ * all copies or substantial portions of the Software.
  *
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
  * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
  * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
  * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
  * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+ * THE SOFTWARE.
  */
 package org.graylog2.plugin.inputs;
 
+import com.codahale.metrics.MetricRegistry;
 import com.codahale.metrics.Timer;
-import com.google.common.collect.Lists;
-import com.google.common.collect.Maps;
-import org.graylog2.plugin.GraylogServer;
+import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableMap;
 import org.graylog2.plugin.Message;
 import org.graylog2.plugin.database.EmbeddedPersistable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicLong;
@@ -38,12 +38,23 @@ import java.util.regex.Pattern;
 
 import static com.codahale.metrics.MetricRegistry.name;
 
-/**
- * @author Lennart Koopmann <lennart@torch.sh>
- */
 public abstract class Extractor implements EmbeddedPersistable {
-
     private static final Logger LOG = LoggerFactory.getLogger(Extractor.class);
+
+    public static final String FIELD_ID = "id";
+    public static final String FIELD_TITLE = "title";
+    public static final String FIELD_ORDER = "order";
+    public static final String FIELD_TYPE = "type";
+    public static final String FIELD_CURSOR_STRATEGY = "cursor_strategy";
+    public static final String FIELD_TARGET_FIELD = "target_field";
+    public static final String FIELD_SOURCE_FIELD = "source_field";
+    public static final String FIELD_CREATOR_USER_ID = "creator_user_id";
+    public static final String FIELD_EXTRACTOR_CONFIG = "extractor_config";
+    public static final String FIELD_CONDITION_TYPE = "condition_type";
+    public static final String FIELD_CONDITION_VALUE = "condition_value";
+    public static final String FIELD_CONVERTERS = "converters";
+    public static final String FIELD_CONVERTER_TYPE = "type";
+    public static final String FIELD_CONVERTER_CONFIG = "config";
 
     public enum Type {
         SUBSTRING,
@@ -87,7 +98,10 @@ public abstract class Extractor implements EmbeddedPersistable {
 
     protected abstract Result run(String field);
 
-    public Extractor(String id,
+    protected final MetricRegistry metricRegistry;
+
+    public Extractor(MetricRegistry metricRegistry,
+                     String id,
                      String title,
                      int order,
                      Type type,
@@ -99,6 +113,7 @@ public abstract class Extractor implements EmbeddedPersistable {
                      List<Converter> converters,
                      ConditionType conditionType,
                      String conditionValue) throws ReservedFieldException {
+        this.metricRegistry = metricRegistry;
         if (Message.RESERVED_FIELDS.contains(targetField) && !Message.RESERVED_SETTABLE_FIELDS.contains(targetField)) {
             throw new ReservedFieldException("You cannot apply an extractor on reserved field [" + targetField + "].");
         }
@@ -127,7 +142,7 @@ public abstract class Extractor implements EmbeddedPersistable {
         this.converterTimerName = name(getClass(), getType().toString().toLowerCase(), getId(), "converterExecutionTime");
     }
 
-    public void runExtractor(GraylogServer server, Message msg) {
+    public void runExtractor(Message msg) {
         // We can only work on Strings.
         if (!(msg.getField(sourceField) instanceof String)) {
             return;
@@ -146,8 +161,7 @@ public abstract class Extractor implements EmbeddedPersistable {
             }
         }
 
-        Timer timer = server.metrics().timer(getTotalTimerName());
-        final Timer.Context timerContext = timer.time();
+        final Timer.Context timerContext = metricRegistry.timer(getTotalTimerName()).time();
 
         Result result = run(field);
 
@@ -166,7 +180,7 @@ public abstract class Extractor implements EmbeddedPersistable {
 
             String finalResult = sb.toString();
 
-            if(finalResult.isEmpty()) {
+            if (finalResult.isEmpty()) {
                 finalResult = "fullyCutByExtractor";
             }
 
@@ -174,14 +188,13 @@ public abstract class Extractor implements EmbeddedPersistable {
             msg.addField(sourceField, finalResult);
         }
 
-        runConverters(server, msg);
+        runConverters(msg);
 
         timerContext.stop();
     }
 
-    public void runConverters(GraylogServer server, Message msg) {
-        Timer cTimer = server.metrics().timer(getConverterTimerName());
-        final Timer.Context cTimerContext = cTimer.time();
+    public void runConverters(Message msg) {
+        final Timer.Context timerContext = metricRegistry.timer(getConverterTimerName()).time();
 
         for (Converter converter : converters) {
             try {
@@ -190,7 +203,7 @@ public abstract class Extractor implements EmbeddedPersistable {
                 }
 
                 if (!converter.buildsMultipleFields()) {
-                    Object converted = converter.convert((String) msg.getFields().get(targetField));
+                    final Object converted = converter.convert((String) msg.getFields().get(targetField));
 
                     // We have arrived here if no exception was thrown and can safely replace the original field.
                     msg.removeField(targetField);
@@ -204,7 +217,7 @@ public abstract class Extractor implements EmbeddedPersistable {
                             if (LOG.isDebugEnabled()) {
                                 LOG.debug(
                                         "Not setting reserved field {} from converter {} on message {}, rest of the message is being processed",
-                                        new Object[]{reservedField, converter.getType(), msg.getId()});
+                                        reservedField, converter.getType(), msg.getId());
                             }
                             converterExceptions.incrementAndGet();
                             convert.remove(reservedField);
@@ -219,10 +232,10 @@ public abstract class Extractor implements EmbeddedPersistable {
             }
         }
 
-        cTimerContext.stop();
+        timerContext.stop();
     }
 
-    public class ReservedFieldException extends Exception {
+    public static class ReservedFieldException extends Exception {
         public ReservedFieldException(String msg) {
             super(msg);
         }
@@ -277,35 +290,38 @@ public abstract class Extractor implements EmbeddedPersistable {
     }
 
     public Map<String, Object> getPersistedFields() {
-        return new HashMap<String, Object>() {{
-            put("id", id);
-            put("title", title);
-            put("order", order);
-            put("type", superType.toString().toLowerCase());
-            put("cursor_strategy", cursorStrategy.toString().toLowerCase());
-            put("target_field", targetField);
-            put("source_field", sourceField);
-            put("creator_user_id", creatorUserId);
-            put("extractor_config", extractorConfig);
-            put("condition_type", conditionType.toString().toLowerCase());
-            put("condition_value", conditionValue);
-            put("converters", converterConfigMap());
-        }};
+        return ImmutableMap.<String, Object>builder()
+                .put(FIELD_ID, id)
+                .put(FIELD_TITLE, title)
+                .put(FIELD_ORDER, order)
+                .put(FIELD_TYPE, superType.toString().toLowerCase())
+                .put(FIELD_CURSOR_STRATEGY, cursorStrategy.toString().toLowerCase())
+                .put(FIELD_TARGET_FIELD, targetField)
+                .put(FIELD_SOURCE_FIELD, sourceField)
+                .put(FIELD_CREATOR_USER_ID, creatorUserId)
+                .put(FIELD_EXTRACTOR_CONFIG, extractorConfig)
+                .put(FIELD_CONDITION_TYPE, conditionType.toString().toLowerCase())
+                .put(FIELD_CONDITION_VALUE, conditionValue)
+                .put(FIELD_CONVERTERS, converterConfigMap())
+                .build();
+    }
+
+    public List<Converter> getConverters() {
+        return converters;
     }
 
     public List<Map<String, Object>> converterConfigMap() {
-        List<Map<String, Object>> converterConfig = Lists.newArrayList();
+        final ImmutableList.Builder<Map<String, Object>> listBuilder = ImmutableList.builder();
 
         for (Converter converter : converters) {
-            Map<String, Object> config = Maps.newHashMap();
-
-            config.put("type", converter.getType().toLowerCase());
-            config.put("config", converter.getConfig());
-
-            converterConfig.add(config);
+            final Map<String, Object> config = ImmutableMap.of(
+                    FIELD_CONVERTER_TYPE, converter.getType().toLowerCase(),
+                    FIELD_CONVERTER_CONFIG, converter.getConfig()
+            );
+            listBuilder.add(config);
         }
 
-        return converterConfig;
+        return listBuilder.build();
     }
 
     public String getTotalTimerName() {
@@ -328,7 +344,7 @@ public abstract class Extractor implements EmbeddedPersistable {
         exceptions.incrementAndGet();
     }
 
-    public class Result {
+    public static class Result {
 
         private final String value;
         private final int beginIndex;
@@ -353,5 +369,4 @@ public abstract class Extractor implements EmbeddedPersistable {
         }
 
     }
-
 }

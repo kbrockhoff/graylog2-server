@@ -1,6 +1,4 @@
 /**
- * Copyright 2012 Lennart Koopmann <lennart@socketfeed.com>
- *
  * This file is part of Graylog2.
  *
  * Graylog2 is free software: you can redistribute it and/or modify
@@ -15,50 +13,55 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with Graylog2.  If not, see <http://www.gnu.org/licenses/>.
- *
  */
-
 package org.graylog2.outputs;
 
-import com.google.common.collect.Lists;
-import java.util.List;
 import org.graylog2.plugin.Message;
+import org.graylog2.plugin.outputs.MessageOutput;
+import org.graylog2.plugin.streams.Output;
 import org.graylog2.plugin.streams.Stream;
-import org.graylog2.streams.StreamImpl;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import javax.inject.Inject;
+import java.util.HashSet;
+import java.util.Set;
 
 /**
  * @author Lennart Koopmann <lennart@socketfeed.com>
  */
 public class OutputRouter {
-    
-    public static String ES_CLASS_NAME = BatchedElasticSearchOutput.class.getCanonicalName();
-    
-    public static List<Message> getMessagesForOutput(List<Message> msgs, String outputTypeClass) {
-        List<Message> filteredMessages = Lists.newArrayList();
-        
-        for (Message msg : msgs) {
-            if (checkRouting(outputTypeClass, msg)) {
-                filteredMessages.add(msg);
-            }
-        }
-        
-        return filteredMessages;
+    private static final Logger LOG = LoggerFactory.getLogger(OutputRouter.class);
+
+    private final MessageOutput defaultMessageOutput;
+    private final OutputRegistry outputRegistry;
+
+    @Inject
+    public OutputRouter(@DefaultMessageOutput MessageOutput defaultMessageOutput,
+                        OutputRegistry outputRegistry) {
+        this.defaultMessageOutput = defaultMessageOutput;
+        this.outputRegistry = outputRegistry;
     }
-    
-    private static boolean checkRouting(String outputTypeClass, Message msg) {
-        // ElasticSearch gets all messages.
-        if (outputTypeClass.equals(ES_CLASS_NAME)) {
-            return true;
+
+    protected Set<MessageOutput> getMessageOutputsForStream(Stream stream) {
+        Set<MessageOutput> result = new HashSet<>();
+        for (Output output : stream.getOutputs()) {
+            final MessageOutput messageOutput = outputRegistry.getOutputForId(output.getId());
+            if (messageOutput != null)
+                result.add(messageOutput);
         }
-        
-        for (Stream stream : msg.getStreams()) {
-            if (((StreamImpl) stream).hasConfiguredOutputs(outputTypeClass)) {
-                return true;
-            }
-        }
-        
-        // No stream had that output configured.
-        return false;
+
+        return result;
     }
-    
+
+    public Set<MessageOutput> getOutputsForMessage(Message msg) {
+        Set<MessageOutput> result = new HashSet<>();
+
+        result.add(defaultMessageOutput);
+
+        for (Stream stream : msg.getStreams())
+            result.addAll(getMessageOutputsForStream(stream));
+
+        return result;
+    }
 }

@@ -1,6 +1,4 @@
 /**
- * Copyright 2013 Lennart Koopmann <lennart@socketfeed.com>
- *
  * This file is part of Graylog2.
  *
  * Graylog2 is free software: you can redistribute it and/or modify
@@ -15,9 +13,7 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with Graylog2.  If not, see <http://www.gnu.org/licenses/>.
- *
  */
-
 package org.graylog2;
 
 import org.slf4j.Logger;
@@ -28,18 +24,22 @@ import org.slf4j.LoggerFactory;
  */
 public class UI {
 
-    private static final String HELP_DOCS = "http://support.torch.sh/help/kb";
-    private static final String HELP_MAILING_LIST = "http://support.torch.sh/help/kb/general/forums-mailing-list";
-    private static final String HELP_ISSUE_TRACKER = "http://support.torch.sh/help/kb/general/issue-trackers";
-    private static final String HELP_TORCH = "http://www.torch.sh/";
+    private static final String HELP_DOCS = "http://graylog2.org/resources/documentation";
+    private static final String HELP_COMMUNITY = "http://graylog2.org/resources/community-support";
+    private static final String HELP_COMMERCIAL = "http://graylog2.org/products";
 
-    private static final Logger LOG = LoggerFactory.getLogger(Main.class);
+    private static final Logger LOG = LoggerFactory.getLogger(UI.class);
 
     public static void exitHardWithWall(String msg) {
         exitHardWithWall(msg, new String[]{});
     }
 
-    public static void exitHardWithWall(String msg, String[] docLinks) {
+    public static void exitHardWithWall(String msg, String... docLinks) {
+        LOG.error(wallString(msg, docLinks));
+        throw new IllegalStateException();
+    }
+
+    public static String wallString(String msg, String... docLinks) {
         StringBuilder sb = new StringBuilder("\n");
 
         sb.append("\n").append(wall("#")).append("\n");
@@ -48,25 +48,22 @@ public class UI {
 
         sb.append("Need help?").append("\n\n");
         sb.append("* Official documentation: ").append(HELP_DOCS).append("\n");
-        sb.append("* Mailing list: ").append(HELP_MAILING_LIST).append("\n");
-        sb.append("* Issue tracker: ").append(HELP_ISSUE_TRACKER).append("\n");
-        sb.append("* Commercial support: ").append(HELP_TORCH).append("\n");
+        sb.append("* Community support: ").append(HELP_COMMUNITY).append("\n");
+        sb.append("* Commercial support: ").append(HELP_COMMERCIAL).append("\n");
 
         if (docLinks != null && docLinks.length > 0) {
             sb.append("\n").append("But we also got some specific help " +
-                    "pages that might help you in this case:").append("\n\n");
+                                           "pages that might help you in this case:").append("\n\n");
 
-            for (int i = 0; i < docLinks.length; i++) {
-                sb.append("* ").append(docLink(docLinks[i])).append("\n");
+            for (final String docLink : docLinks) {
+                sb.append("* ").append(docLink).append("\n");
             }
         }
 
         sb.append("\n").append("Terminating. :(").append("\n\n");
-
         sb.append(wall("#"));
 
-        LOG.error(sb.toString());
-        System.exit(1);
+        return sb.toString();
     }
 
     private static String wall(String symbol) {
@@ -78,13 +75,4 @@ public class UI {
 
         return sb.append("\n").toString();
     }
-
-    private static String docLink(String part) {
-        if (!part.startsWith("/")) {
-            part = "/" + part;
-        }
-
-        return "http://support.torch.sh/help/kb" + part;
-    }
-
 }

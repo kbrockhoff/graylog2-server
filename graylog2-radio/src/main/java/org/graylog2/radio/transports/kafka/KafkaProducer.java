@@ -1,6 +1,4 @@
 /**
- * Copyright 2013 Lennart Koopmann <lennart@torch.sh>
- *
  * This file is part of Graylog2.
  *
  * Graylog2 is free software: you can redistribute it and/or modify
@@ -15,66 +13,76 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with Graylog2.  If not, see <http://www.gnu.org/licenses/>.
- *
  */
 package org.graylog2.radio.transports.kafka;
 
+import com.codahale.metrics.Meter;
+import com.codahale.metrics.MetricRegistry;
+import com.codahale.metrics.Timer;
 import kafka.javaapi.producer.Producer;
 import kafka.producer.KeyedMessage;
 import kafka.producer.ProducerConfig;
 import org.graylog2.plugin.Message;
 import org.graylog2.plugin.RadioMessage;
-import org.graylog2.radio.Radio;
+import org.graylog2.plugin.ServerStatus;
+import org.graylog2.radio.Configuration;
 import org.graylog2.radio.transports.RadioTransport;
 import org.msgpack.MessagePack;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javax.inject.Inject;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.util.Properties;
 
-/**
- * @author Lennart Koopmann <lennart@torch.sh>
- */
+import static com.codahale.metrics.MetricRegistry.name;
+
 public class KafkaProducer implements RadioTransport {
-
     private static final Logger LOG = LoggerFactory.getLogger(KafkaProducer.class);
-
-    public final static String KAFKA_TOPIC = "graylog2-radio-messages";
+    public static final String KAFKA_TOPIC = "graylog2-radio-messages";
 
     private final Producer<byte[], byte[]> producer;
-
     private final MessagePack pack;
+    private final Meter incomingMessages;
+    private final Meter rejectedMessages;
+    private final Timer processTime;
 
-    public KafkaProducer(Radio radio) {
+    @Inject
+    public KafkaProducer(ServerStatus serverStatus, Configuration configuration, MetricRegistry metricRegistry) {
         pack = new MessagePack();
 
         Properties props = new Properties();
-        props.put("metadata.broker.list", radio.getConfiguration().getKafkaBrokers());
+        props.put("metadata.broker.list", configuration.getKafkaBrokers());
         props.put("partitioner.class", "kafka.producer.DefaultPartitioner");
         props.put("serializer.class", "kafka.serializer.DefaultEncoder");
-        props.put("request.required.acks", String.valueOf(radio.getConfiguration().getKafkaRequiredAcks()));
-        props.put("client.id", "graylog2-radio-" + radio.getNodeId());
-        props.put("producer.type", radio.getConfiguration().getKafkaProducerType());
-        props.put("queue.buffering.max.ms", String.valueOf(radio.getConfiguration().getKafkaBatchMaxWaitMs()));
-        props.put("batch.num.messages", String.valueOf(radio.getConfiguration().getKafkaBatchSize()));
+        props.put("request.required.acks", String.valueOf(configuration.getKafkaRequiredAcks()));
+        props.put("client.id", "graylog2-radio-" + serverStatus.getNodeId().toString());
+        props.put("producer.type", configuration.getKafkaProducerType());
+        props.put("queue.buffering.max.ms", String.valueOf(configuration.getKafkaBatchMaxWaitMs()));
+        props.put("batch.num.messages", String.valueOf(configuration.getKafkaBatchSize()));
 
         ProducerConfig config = new ProducerConfig(props);
-        producer = new Producer<byte[], byte[]>(config);
+        producer = new Producer<>(config);
+
+        incomingMessages = metricRegistry.meter(name(KafkaProducer.class, "incomingMessages"));
+        rejectedMessages = metricRegistry.meter(name(KafkaProducer.class, "rejectedMessages"));
+        processTime = metricRegistry.timer(name(KafkaProducer.class, "processTime"));
     }
 
     @Override
     public void send(Message msg) {
         KeyedMessage<byte[], byte[]> data;
 
-        try {
-            data = new KeyedMessage<byte[], byte[]>(KAFKA_TOPIC, msg.getId().getBytes(), RadioMessage.serialize(pack, msg));
+        try(Timer.Context context = processTime.time()) {
+            incomingMessages.mark();
+            data = new KeyedMessage<>(
+                    KAFKA_TOPIC, msg.getId().getBytes(StandardCharsets.UTF_8), RadioMessage.serialize(pack, msg));
+
+            producer.send(data);
         } catch(IOException e) {
-            LOG.error("Could not serialize message.");
-            return;
+            LOG.error("Could not serialize message.", e);
+            rejectedMessages.mark();
         }
-
-        producer.send(data);
     }
-
 }

@@ -1,6 +1,4 @@
 /**
- * Copyright 2013 Lennart Koopmann <lennart@torch.sh>
- *
  * This file is part of Graylog2.
  *
  * Graylog2 is free software: you can redistribute it and/or modify
@@ -15,7 +13,6 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with Graylog2.  If not, see <http://www.gnu.org/licenses/>.
- *
  */
 package org.graylog2.utilities.date;
 
@@ -27,23 +24,23 @@ import org.joda.time.DateTime;
 import org.joda.time.DateTimeZone;
 import org.joda.time.format.DateTimeFormat;
 
-import java.util.*;
+import java.util.Collections;
+import java.util.Date;
+import java.util.List;
+import java.util.Map;
+import java.util.TimeZone;
 
-/**
- * @author Lennart Koopmann <lennart@torch.sh>
- */
 public class NaturalDateParser {
-
     public static final TimeZone UTC = TimeZone.getTimeZone("UTC");
 
-    public Result parse(String string) throws DateNotParsableException {
+    public Result parse(final String string) throws DateNotParsableException {
         Date from = null;
         Date to = null;
 
-        Parser parser = new Parser(UTC);
-        List<DateGroup> groups = parser.parse(string);
+        final Parser parser = new Parser(UTC);
+        final List<DateGroup> groups = parser.parse(string);
         if (!groups.isEmpty()) {
-            List<Date> dates = groups.get(0).getDates();
+            final List<Date> dates = groups.get(0).getDates();
 
             if (dates.size() >= 1) {
                 from = dates.get(0);
@@ -52,6 +49,12 @@ public class NaturalDateParser {
             if (dates.size() >= 2) {
                 to = dates.get(1);
             }
+
+            if(from != null && to != null && from.compareTo(to) > 0) {
+                final Date swap = from;
+                from = to;
+                to = swap;
+            }
         } else {
             throw new DateNotParsableException();
         }
@@ -59,12 +62,11 @@ public class NaturalDateParser {
         return new Result(from, to);
     }
 
-    public class Result {
+    public static class Result {
+        private final DateTime from;
+        private final DateTime to;
 
-        private DateTime from;
-        private DateTime to;
-
-        public Result(Date from, Date to) {
+        public Result(final Date from, final Date to) {
             if (from != null) {
                 this.from = new DateTime(from, DateTimeZone.UTC);
             } else {
@@ -95,13 +97,12 @@ public class NaturalDateParser {
             return result;
         }
 
-        private String dateFormat(DateTime x) {
+        private String dateFormat(final DateTime x) {
             return x.toString(DateTimeFormat.forPattern(Tools.ES_DATE_FORMAT_NO_MS).withZoneUTC());
         }
-
     }
 
-    public class DateNotParsableException extends Throwable {
+    public static class DateNotParsableException extends Exception {
     }
 
 }

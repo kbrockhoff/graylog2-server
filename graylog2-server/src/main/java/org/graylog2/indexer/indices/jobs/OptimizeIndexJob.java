@@ -1,6 +1,4 @@
 /**
- * Copyright 2013 Lennart Koopmann <lennart@torch.sh>
- *
  * This file is part of Graylog2.
  *
  * Graylog2 is free software: you can redistribute it and/or modify
@@ -15,13 +13,15 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with Graylog2.  If not, see <http://www.gnu.org/licenses/>.
- *
  */
 package org.graylog2.indexer.indices.jobs;
 
-import org.elasticsearch.action.admin.indices.optimize.OptimizeRequest;
-import org.graylog2.Core;
-import org.graylog2.system.activities.Activity;
+import com.google.inject.assistedinject.Assisted;
+import com.google.inject.assistedinject.AssistedInject;
+import org.graylog2.indexer.indices.Indices;
+import org.graylog2.plugin.ServerStatus;
+import org.graylog2.shared.system.activities.Activity;
+import org.graylog2.shared.system.activities.ActivityWriter;
 import org.graylog2.system.jobs.SystemJob;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -30,33 +30,36 @@ import org.slf4j.LoggerFactory;
  * @author Lennart Koopmann <lennart@torch.sh>
  */
 public class OptimizeIndexJob extends SystemJob {
+    public interface Factory {
+        OptimizeIndexJob create(String index);
+    }
 
     private static final Logger LOG = LoggerFactory.getLogger(OptimizeIndexJob.class);
 
     public static final int MAX_CONCURRENCY = 1000;
 
+    private final ActivityWriter activityWriter;
     private final String index;
+    private final Indices indices;
 
-    public OptimizeIndexJob(Core core, String index) {
-        this.core = core;
+    @AssistedInject
+    public OptimizeIndexJob(ServerStatus serverStatus,
+                            Indices indices,
+                            ActivityWriter activityWriter,
+                            @Assisted String index) {
+        super(serverStatus);
+        this.indices = indices;
+        this.activityWriter = activityWriter;
         this.index = index;
     }
 
     @Override
     public void execute() {
         String msg = "Optimizing index <" + index + ">.";
-        core.getActivityWriter().write(new Activity(msg, OptimizeIndexJob.class));
+        activityWriter.write(new Activity(msg, OptimizeIndexJob.class));
         LOG.info(msg);
 
-        // http://www.elasticsearch.org/guide/reference/api/admin-indices-optimize/
-        OptimizeRequest or = new OptimizeRequest(index);
-
-        or.maxNumSegments(1);
-        or.onlyExpungeDeletes(false);
-        or.flush(true);
-        or.waitForMerge(true); // This makes us block until the operation finished.
-
-        core.getIndexer().getClient().admin().indices().optimize(or).actionGet();
+        indices.optimizeIndex(index);
     }
 
     @Override

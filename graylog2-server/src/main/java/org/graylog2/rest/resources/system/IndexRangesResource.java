@@ -1,6 +1,4 @@
 /**
- * Copyright 2013 Lennart Koopmann <lennart@torch.sh>
- *
  * This file is part of Graylog2.
  *
  * Graylog2 is free software: you can redistribute it and/or modify
@@ -15,35 +13,39 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with Graylog2.  If not, see <http://www.gnu.org/licenses/>.
- *
  */
 package org.graylog2.rest.resources.system;
 
 import com.codahale.metrics.annotation.Timed;
 import com.google.common.collect.Lists;
-import com.google.common.collect.Maps;
+import com.wordnik.swagger.annotations.Api;
+import com.wordnik.swagger.annotations.ApiOperation;
+import com.wordnik.swagger.annotations.ApiResponse;
+import com.wordnik.swagger.annotations.ApiResponses;
 import org.apache.shiro.authz.annotation.RequiresAuthentication;
 import org.apache.shiro.authz.annotation.RequiresPermissions;
+import org.graylog2.indexer.Deflector;
 import org.graylog2.indexer.ranges.IndexRange;
+import org.graylog2.indexer.ranges.IndexRangeService;
 import org.graylog2.indexer.ranges.RebuildIndexRangesJob;
-import org.graylog2.plugin.Tools;
-import org.graylog2.rest.documentation.annotations.Api;
-import org.graylog2.rest.documentation.annotations.ApiOperation;
-import org.graylog2.rest.documentation.annotations.ApiResponse;
-import org.graylog2.rest.documentation.annotations.ApiResponses;
 import org.graylog2.rest.resources.RestResource;
+import org.graylog2.rest.resources.system.responses.IndexRangesResponse;
 import org.graylog2.security.RestPermissions;
 import org.graylog2.system.jobs.SystemJob;
 import org.graylog2.system.jobs.SystemJobConcurrencyException;
-import org.joda.time.DateTime;
+import org.graylog2.system.jobs.SystemJobManager;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import javax.ws.rs.*;
+import javax.inject.Inject;
+import javax.ws.rs.GET;
+import javax.ws.rs.POST;
+import javax.ws.rs.Path;
+import javax.ws.rs.Produces;
+import javax.ws.rs.WebApplicationException;
 import javax.ws.rs.core.MediaType;
 import javax.ws.rs.core.Response;
 import java.util.List;
-import java.util.Map;
 
 /**
  * @author Lennart Koopmann <lennart@torch.sh>
@@ -55,40 +57,40 @@ public class IndexRangesResource extends RestResource {
 
     private static final Logger LOG = LoggerFactory.getLogger(IndexRangesResource.class);
 
+    private final IndexRangeService indexRangeService;
+    private final RebuildIndexRangesJob.Factory rebuildIndexRangesJobFactory;
+    private final Deflector deflector;
+    private final SystemJobManager systemJobManager;
+
+    @Inject
+    public IndexRangesResource(IndexRangeService indexRangeService,
+                               RebuildIndexRangesJob.Factory rebuildIndexRangesJobFactory,
+                               Deflector deflector,
+                               SystemJobManager systemJobManager) {
+        this.indexRangeService = indexRangeService;
+        this.rebuildIndexRangesJobFactory = rebuildIndexRangesJobFactory;
+        this.deflector = deflector;
+        this.systemJobManager = systemJobManager;
+    }
+
     @GET @Timed
     @ApiOperation(value = "Get a list of all index ranges")
     @Produces(MediaType.APPLICATION_JSON)
-    public String list() {
-        Map<String, Object> result = Maps.newHashMap();
-        List<Map<String, Object>> ranges = Lists.newArrayList();
+    public IndexRangesResponse list() {
+        IndexRangesResponse irp = new IndexRangesResponse();
+        List<IndexRange> ranges = Lists.newArrayList();
 
-        for (IndexRange range : IndexRange.getFrom(core, 0)) {
+        for (IndexRange range : indexRangeService.getFrom(0)) {
             if (!isPermitted(RestPermissions.INDEXRANGES_READ, range.getIndexName())) {
                 continue;
             }
-            Map<String, Object> rangeInfo = Maps.newHashMap();
-
-            // Calculated at and the calculation time in ms are not always set, depending on how/why the entry was created.
-            DateTime calculatedAt = range.getCalculatedAt();
-            if (calculatedAt != null) {
-                rangeInfo.put("calculated_at", Tools.getISO8601String(calculatedAt));
-            }
-
-            int calculationTookMs = range.getCalculationTookMs();
-            if (calculationTookMs >= 0) {
-                rangeInfo.put("calculation_took_ms", calculationTookMs);
-            }
-
-            rangeInfo.put("starts", Tools.getISO8601String(range.getStart()));
-            rangeInfo.put("index", range.getIndexName());
-
-            ranges.add(rangeInfo);
+            ranges.add(range);
         }
 
-        result.put("ranges", ranges);
-        result.put("total", ranges.size());
+        irp.ranges = ranges;
+        irp.total = ranges.size();
 
-        return json(result);
+        return irp;
     }
 
     @POST @Timed
@@ -103,9 +105,9 @@ public class IndexRangesResource extends RestResource {
     })
     @Produces(MediaType.APPLICATION_JSON)
     public Response rebuild() {
-        SystemJob rebuildJob = new RebuildIndexRangesJob(core);
+        SystemJob rebuildJob = rebuildIndexRangesJobFactory.create(this.deflector);
         try {
-            core.getSystemJobManager().submit(rebuildJob);
+            this.systemJobManager.submit(rebuildJob);
         } catch (SystemJobConcurrencyException e) {
             LOG.error("Concurrency level of this job reached: " + e.getMessage());
             throw new WebApplicationException(403);

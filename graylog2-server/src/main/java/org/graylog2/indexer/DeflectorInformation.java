@@ -1,6 +1,4 @@
 /**
- * Copyright 2012 Lennart Koopmann <lennart@socketfeed.com>
- *
  * This file is part of Graylog2.
  *
  * Graylog2 is free software: you can redistribute it and/or modify
@@ -15,35 +13,35 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with Graylog2.  If not, see <http://www.gnu.org/licenses/>.
- *
  */
 package org.graylog2.indexer;
 
 import com.google.common.collect.Lists;
 import com.google.common.collect.Maps;
-import java.util.Iterator;
-import java.util.List;
-import java.util.Map;
 import org.elasticsearch.action.admin.indices.stats.IndexShardStats;
 import org.elasticsearch.action.admin.indices.stats.IndexStats;
 import org.elasticsearch.action.admin.indices.stats.ShardStats;
-import org.graylog2.Core;
+import org.graylog2.indexer.cluster.Cluster;
 import org.graylog2.plugin.Tools;
+
+import java.util.Iterator;
+import java.util.List;
+import java.util.Map;
 
 /**
  * @author Lennart Koopmann <lennart@socketfeed.com>
  */
 public class DeflectorInformation {
-    
-    private Core graylogServer;
+
+    private final Cluster cluster;
     
     private Map<String, IndexStats> indices = Maps.newHashMap();
     private String deflectorTarget;
     private int maxMessagesPerIndex;
     private String serverId;
     
-    public DeflectorInformation(Core server) {
-        this.graylogServer = server;
+    public DeflectorInformation(Cluster cluster) {
+        this.cluster = cluster;
     }
     
     public void addIndex(IndexStats index) {
@@ -105,8 +103,8 @@ public class DeflectorInformation {
 
                 Map<String, Object> shard = Maps.newHashMap();
 
-                shard.put("node_hostname", graylogServer.getIndexer().nodeIdToHostName(ss.getShardRouting().currentNodeId()));
-                shard.put("node_name", graylogServer.getIndexer().nodeIdToName(ss.getShardRouting().currentNodeId()));
+                shard.put("node_hostname", cluster.nodeIdToHostName(ss.getShardRouting().currentNodeId()));
+                shard.put("node_name", cluster.nodeIdToName(ss.getShardRouting().currentNodeId()));
                 shard.put("id", ss.getShardId());
                 shard.put("node_id", ss.getShardRouting().currentNodeId());
                 shard.put("primary", ss.getShardRouting().primary());
@@ -114,7 +112,7 @@ public class DeflectorInformation {
                 shard.put("is_started", ss.getShardRouting().started());
                 shard.put("is_unassigned", ss.getShardRouting().unassigned());
                 shard.put("is_relocating", ss.getShardRouting().relocating());
-                shard.put("relocating_to", graylogServer.getIndexer().nodeIdToName(ss.getShardRouting().relocatingNodeId()));
+                shard.put("relocating_to", cluster.nodeIdToName(ss.getShardRouting().relocatingNodeId()));
 
                 shards.add(shard);
             }

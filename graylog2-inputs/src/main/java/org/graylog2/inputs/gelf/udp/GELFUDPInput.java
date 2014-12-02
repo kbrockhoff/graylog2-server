@@ -1,6 +1,4 @@
 /**
- * Copyright 2012 Lennart Koopmann <lennart@socketfeed.com>
- *
  * This file is part of Graylog2.
  *
  * Graylog2 is free software: you can redistribute it and/or modify
@@ -15,66 +13,54 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with Graylog2.  If not, see <http://www.gnu.org/licenses/>.
- *
  */
-
 package org.graylog2.inputs.gelf.udp;
 
-
-import com.codahale.metrics.Gauge;
 import com.codahale.metrics.MetricRegistry;
-import com.google.common.util.concurrent.ThreadFactoryBuilder;
-import org.graylog2.inputs.gelf.GELFInputBase;
-import org.graylog2.plugin.inputs.*;
-import org.jboss.netty.bootstrap.ConnectionlessBootstrap;
-import org.jboss.netty.channel.FixedReceiveBufferSizePredictorFactory;
-import org.jboss.netty.channel.socket.nio.NioDatagramChannelFactory;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import com.google.inject.Inject;
+import com.google.inject.assistedinject.Assisted;
+import com.google.inject.assistedinject.AssistedInject;
+import org.graylog2.inputs.codecs.GelfCodec;
+import org.graylog2.inputs.transports.UdpTransport;
+import org.graylog2.plugin.LocalMetricRegistry;
+import org.graylog2.plugin.configuration.Configuration;
+import org.graylog2.plugin.inputs.MessageInput;
 
-import java.util.Map;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+public class GELFUDPInput extends MessageInput {
 
-/**
- * @author Lennart Koopmann <lennart@socketfeed.com>
- */
-public class GELFUDPInput extends GELFInputBase {
+    private static final String NAME = "GELF UDP";
 
-    private static final Logger LOG = LoggerFactory.getLogger(GELFUDPInput.class);
+    @AssistedInject
+    public GELFUDPInput(MetricRegistry metricRegistry,
+                        @Assisted Configuration configuration,
+                        UdpTransport.Factory udpFactory,
+                        GelfCodec.Factory gelfCodecFactory, LocalMetricRegistry localRegistry, Config config, Descriptor descriptor) {
+        super(metricRegistry, udpFactory.create(configuration), localRegistry, gelfCodecFactory.create(configuration),
+              config, descriptor);
+    }
 
-    public static final String NAME = "GELF UDP";
+    public interface Factory extends MessageInput.Factory<GELFUDPInput> {
+        @Override
+        GELFUDPInput create(Configuration configuration);
 
-    @Override
-    public void launch() throws MisfireException {
-        // Register throughput counter gauges.
-        for(Map.Entry<String,Gauge<Long>> gauge : throughputCounter.gauges().entrySet()) {
-            graylogServer.metrics().register(MetricRegistry.name(getUniqueReadableId(), gauge.getKey()), gauge.getValue());
-        }
+        @Override
+        Config getConfig();
 
-        final ExecutorService workerThreadPool = Executors.newCachedThreadPool(
-                new ThreadFactoryBuilder()
-                        .setNameFormat("input-" + getId() + "-gelfudp-worker-%d")
-                        .build());
+        @Override
+        Descriptor getDescriptor();
+    }
 
-        bootstrap = new ConnectionlessBootstrap(new NioDatagramChannelFactory(workerThreadPool));
-        bootstrap.setOption("receiveBufferSizePredictorFactory", new FixedReceiveBufferSizePredictorFactory(8192));
-        bootstrap.setPipelineFactory(new GELFUDPPipelineFactory(graylogServer, this, throughputCounter));
-        bootstrap.setOption("receiveBufferSize", getRecvBufferSize());
-
-        try {
-            channel = ((ConnectionlessBootstrap) bootstrap).bind(socketAddress);
-            LOG.info("Started GELF UDP input on {}", socketAddress);
-        } catch (Exception e) {
-            String msg = "Could not bind UDP GELF input to address " + socketAddress;
-            LOG.error(msg, e);
-            throw new MisfireException(msg);
+    public static class Descriptor extends MessageInput.Descriptor {
+        @Inject
+        public Descriptor() {
+            super(NAME, false, "");
         }
     }
 
-    @Override
-    public String getName() {
-        return NAME;
+    public static class Config extends MessageInput.Config {
+        @Inject
+        public Config(UdpTransport.Factory transport, GelfCodec.Factory codec) {
+            super(transport.getConfig(), codec.getConfig());
+        }
     }
-
 }

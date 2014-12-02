@@ -1,6 +1,4 @@
 /**
- * Copyright 2013 Lennart Koopmann <lennart@torch.sh>
- *
  * This file is part of Graylog2.
  *
  * Graylog2 is free software: you can redistribute it and/or modify
@@ -15,21 +13,20 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with Graylog2.  If not, see <http://www.gnu.org/licenses/>.
- *
  */
 package org.graylog2.rest.documentation.generator;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.PropertyNamingStrategy;
 import com.fasterxml.jackson.databind.SerializationFeature;
-import org.graylog2.Core;
+import org.graylog2.ServerVersion;
 import org.testng.annotations.BeforeClass;
 import org.testng.annotations.Test;
 
 import java.util.List;
 import java.util.Map;
 
-import static junit.framework.Assert.*;
+import static org.testng.Assert.*;
 
 /**
  * @author Lennart Koopmann <lennart@torch.sh>
@@ -50,7 +47,7 @@ public class GeneratorTest {
         Generator generator = new Generator("org.graylog2.rest.resources", objectMapper);
         Map<String, Object> result = generator.generateOverview();
 
-        assertEquals(Core.GRAYLOG2_VERSION.toString(), result.get("apiVersion"));
+        assertEquals(ServerVersion.VERSION.toString(), result.get("apiVersion"));
         assertEquals(Generator.EMULATED_SWAGGER_VERSION, result.get("swaggerVersion"));
 
         assertNotNull(result.get("apis"));

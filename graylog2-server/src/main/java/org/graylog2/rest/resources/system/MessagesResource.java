@@ -1,6 +1,4 @@
 /**
- * Copyright 2013 Lennart Koopmann <lennart@torch.sh>
- *
  * This file is part of Graylog2.
  *
  * Graylog2 is free software: you can redistribute it and/or modify
@@ -15,7 +13,6 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with Graylog2.  If not, see <http://www.gnu.org/licenses/>.
- *
  */
 package org.graylog2.rest.resources.system;
 
@@ -25,15 +22,17 @@ import com.google.common.collect.Maps;
 import org.apache.shiro.authz.annotation.RequiresAuthentication;
 import org.apache.shiro.authz.annotation.RequiresPermissions;
 import org.graylog2.plugin.Tools;
-import org.graylog2.rest.documentation.annotations.Api;
-import org.graylog2.rest.documentation.annotations.ApiOperation;
-import org.graylog2.rest.documentation.annotations.ApiParam;
+import com.wordnik.swagger.annotations.Api;
+import com.wordnik.swagger.annotations.ApiOperation;
+import com.wordnik.swagger.annotations.ApiParam;
 import org.graylog2.rest.resources.RestResource;
 import org.graylog2.security.RestPermissions;
 import org.graylog2.system.activities.SystemMessage;
+import org.graylog2.system.activities.SystemMessageService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javax.inject.Inject;
 import javax.ws.rs.GET;
 import javax.ws.rs.Path;
 import javax.ws.rs.Produces;
@@ -52,14 +51,21 @@ public class    MessagesResource extends RestResource {
 
     private static final Logger LOG = LoggerFactory.getLogger(MessagesResource.class);
 
+    private final SystemMessageService systemMessageService;
+
+    @Inject
+    public MessagesResource(SystemMessageService systemMessageService) {
+        this.systemMessageService = systemMessageService;
+    }
+
     @GET @Timed
     @ApiOperation(value = "Get internal Graylog2 system messages")
     @RequiresPermissions(RestPermissions.SYSTEMMESSAGES_READ)
     @Produces(MediaType.APPLICATION_JSON)
-    public String all(@ApiParam(title = "page", description = "Page", required = false) @QueryParam("page") int page) {
+    public String all(@ApiParam(name = "page", value = "Page", required = false) @QueryParam("page") int page) {
         List<Map<String, Object>> messages = Lists.newArrayList();
 
-        for (SystemMessage sm : SystemMessage.all(core, page(page))) {
+        for (SystemMessage sm : systemMessageService.all(page(page))) {
             Map<String, Object> message = Maps.newHashMap();
             message.put("caller", sm.getCaller());
             message.put("content", sm.getContent());
@@ -71,7 +77,7 @@ public class    MessagesResource extends RestResource {
 
         Map<String, Object> result = Maps.newHashMap();
         result.put("messages", messages);
-        result.put("total", SystemMessage.totalCount(core, SystemMessage.COLLECTION));
+        result.put("total", systemMessageService.totalCount());
 
         return json(result);
     }

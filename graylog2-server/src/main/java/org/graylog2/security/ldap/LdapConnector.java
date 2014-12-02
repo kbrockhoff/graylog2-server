@@ -1,6 +1,4 @@
-/*
- * Copyright 2013 TORCH UG
- *
+/**
  * This file is part of Graylog2.
  *
  * Graylog2 is free software: you can redistribute it and/or modify
@@ -31,10 +29,10 @@ import org.apache.directory.api.ldap.model.message.ResultCodeEnum;
 import org.apache.directory.api.ldap.model.message.SearchScope;
 import org.apache.directory.ldap.client.api.LdapConnectionConfig;
 import org.apache.directory.ldap.client.api.LdapNetworkConnection;
-import org.graylog2.Core;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.nio.charset.StandardCharsets;
 import java.text.MessageFormat;
 import java.util.Iterator;
 import java.util.concurrent.Callable;
@@ -42,22 +40,23 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
 public class LdapConnector {
-    private static final Logger log = LoggerFactory.getLogger(LdapConnector.class);
+    private static final Logger LOG = LoggerFactory.getLogger(LdapConnector.class);
 
-    private final Core core;
+    private final int connectionTimeout;
 
-    public LdapConnector(Core core) {
-        this.core = core;
+    public LdapConnector(final int connectionTimeout) {
+        this.connectionTimeout = connectionTimeout;
     }
 
     public LdapNetworkConnection connect(LdapConnectionConfig config) throws LdapException {
         final LdapNetworkConnection connection = new LdapNetworkConnection(config);
-        connection.setTimeOut(TimeUnit.SECONDS.toMillis(2)); // TODO timeout value
+        connection.setTimeOut(connectionTimeout);
 
-        if (log.isTraceEnabled()) {
-            log.trace("Connecting to LDAP server {}:{}, binding with user {}",
-                      new Object[]{config.getLdapHost(), config.getLdapPort(), config.getName()});
+        if (LOG.isTraceEnabled()) {
+            LOG.trace("Connecting to LDAP server {}:{}, binding with user {}",
+                      config.getLdapHost(), config.getLdapPort(), config.getName());
         }
+
         // this will perform an anonymous bind if there were no system credentials
         final SimpleTimeLimiter timeLimiter = new SimpleTimeLimiter(Executors.newSingleThreadExecutor());
         @SuppressWarnings("unchecked")
@@ -68,14 +67,14 @@ public class LdapConnector {
                         return connection.connect();
                     }
                 }, Callable.class,
-                2, TimeUnit.SECONDS); // TODO timeout value
+                connectionTimeout, TimeUnit.MILLISECONDS);
         try {
             final Boolean connected = timeLimitedConnection.call();
             if (!connected) {
                 return null;
             }
         } catch (UncheckedTimeoutException e) {
-            log.error("Timed out connecting to LDAP server", e);
+            LOG.error("Timed out connecting to LDAP server", e);
             throw new LdapException("Could not connect to LDAP server", e.getCause());
         } catch (LdapException e) {
             throw e;
@@ -91,10 +90,10 @@ public class LdapConnector {
     public LdapEntry search(LdapNetworkConnection connection, String searchBase, String searchPattern, String principal, boolean activeDirectory) throws LdapException, CursorException {
         final LdapEntry ldapEntry = new LdapEntry();
 
-        final String filter = MessageFormat.format(searchPattern, principal);
-        if (log.isTraceEnabled()) {
-            log.trace("Search {} for {}, starting at {}",
-                      new Object[]{activeDirectory ? "ActiveDirectory" : "LDAP", filter, searchBase});
+        final String filter = MessageFormat.format(searchPattern, sanitizePrincipal(principal));
+        if (LOG.isTraceEnabled()) {
+            LOG.trace("Search {} for {}, starting at {}",
+                      activeDirectory ? "ActiveDirectory" : "LDAP", filter, searchBase);
         }
         final EntryCursor entryCursor = connection.search(searchBase,
                                                           filter,
@@ -117,24 +116,69 @@ public class LdapConnector {
                 }
             }
         } else {
-            log.trace("No LDAP entry found for filter {}", filter);
+            LOG.trace("No LDAP entry found for filter {}", filter);
             return null;
         }
-        log.trace("LDAP search found entry for DN {} with search filter {}", ldapEntry.getDn(), filter);
+        LOG.trace("LDAP search found entry for DN {} with search filter {}", ldapEntry.getDn(), filter);
         return ldapEntry;
+    }
+
+    /**
+     * Escapes any special chars (RFC 4515) from a string representing a
+     * a search filter assertion value.
+     *
+     * @param input The input string.
+     * @return A assertion value string ready for insertion into a
+     * search filter string.
+     */
+    private String sanitizePrincipal(final String input) {
+        String s = "";
+
+        for (int i = 0; i < input.length(); i++) {
+            char c = input.charAt(i);
+
+            if (c == '*') {
+                // escape asterisk
+                s += "\\2a";
+            } else if (c == '(') {
+                // escape left parenthesis
+                s += "\\28";
+            } else if (c == ')') {
+                // escape right parenthesis
+                s += "\\29";
+            } else if (c == '\\') {
+                // escape backslash
+                s += "\\5c";
+            } else if (c == '\u0000') {
+                // escape NULL char
+                s += "\\00";
+            } else if (c <= 0x7f) {
+                // regular 1-byte UTF-8 char
+                s += String.valueOf(c);
+            } else if (c >= 0x080) {
+                // higher-order 2, 3 and 4-byte UTF-8 chars
+                byte[] utf8bytes = String.valueOf(c).getBytes(StandardCharsets.UTF_8);
+
+                for (byte b : utf8bytes) {
+                    s += String.format("\\%02x", b);
+                }
+            }
+        }
+
+        return s;
     }
 
     public boolean authenticate(LdapNetworkConnection connection, String principal, String credentials) throws LdapException {
         final BindRequestImpl bindRequest = new BindRequestImpl();
         bindRequest.setName(principal);
         bindRequest.setCredentials(credentials);
-        log.trace("Re-binding with DN {} using password", principal);
+        LOG.trace("Re-binding with DN {} using password", principal);
         final BindResponse bind = connection.bind(bindRequest);
         if (!bind.getLdapResult().getResultCode().equals(ResultCodeEnum.SUCCESS)) {
-            log.trace("Re-binding DN {} failed", principal);
+            LOG.trace("Re-binding DN {} failed", principal);
             throw new RuntimeException(bind.toString());
         }
-        log.trace("Binding DN {} did not throw, connection authenticated: {}", principal, connection.isAuthenticated());
+        LOG.trace("Binding DN {} did not throw, connection authenticated: {}", principal, connection.isAuthenticated());
         return connection.isAuthenticated();
     }
 }

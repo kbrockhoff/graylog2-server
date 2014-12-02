@@ -1,6 +1,4 @@
-/*
- * Copyright 2013 TORCH GmbH
- *
+/**
  * This file is part of Graylog2.
  *
  * Graylog2 is free software: you can redistribute it and/or modify
@@ -26,32 +24,44 @@ import org.apache.shiro.authz.AuthorizationInfo;
 import org.apache.shiro.authz.SimpleAuthorizationInfo;
 import org.apache.shiro.realm.AuthorizingRealm;
 import org.apache.shiro.subject.PrincipalCollection;
-import org.graylog2.Core;
 import org.graylog2.users.User;
+import org.graylog2.users.UserService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javax.inject.Inject;
+import java.util.Collections;
 import java.util.List;
 
 public class MongoDbAuthorizationRealm extends AuthorizingRealm {
 
-    private static final Logger log = LoggerFactory.getLogger(MongoDbAuthorizationRealm.class);
-    private final Core core;
+    private static final Logger LOG = LoggerFactory.getLogger(MongoDbAuthorizationRealm.class);
+    private final UserService userService;
 
-    public MongoDbAuthorizationRealm(Core core) {
-        this.core = core;
+    @Inject
+    public MongoDbAuthorizationRealm(UserService userService) {
+        this.userService = userService;
     }
 
     @Override
     protected AuthorizationInfo doGetAuthorizationInfo(PrincipalCollection principals) {
-        log.debug("Retrieving authorization information for {}", principals);
-        final User user = User.load(principals.getPrimaryPrincipal().toString(), core);
+        LOG.debug("Retrieving authorization information for {}", principals);
         final SimpleAuthorizationInfo info = new SimpleAuthorizationInfo();
-        final List<String> permissions = user.getPermissions();
-        if (permissions != null) {
-            info.setStringPermissions(Sets.newHashSet(permissions));
+        final User user = userService.load(principals.getPrimaryPrincipal().toString());
+
+        final List<String> permissions;
+        if (null == user) {
+            permissions = Collections.emptyList();
+        } else {
+            permissions = user.getPermissions();
+
+            if (permissions != null) {
+                info.setStringPermissions(Sets.newHashSet(permissions));
+            }
+
         }
-        log.debug("User {} has permissions: {}", principals, permissions);
+
+        LOG.debug("User {} has permissions: {}", principals, permissions);
         return info;
     }
 

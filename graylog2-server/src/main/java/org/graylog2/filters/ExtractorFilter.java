@@ -1,6 +1,4 @@
 /**
- * Copyright 2013 Lennart Koopmann <lennart@torch.sh>
- *
  * This file is part of Graylog2.
  *
  * Graylog2 is free software: you can redistribute it and/or modify
@@ -15,16 +13,15 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with Graylog2.  If not, see <http://www.gnu.org/licenses/>.
- *
  */
 package org.graylog2.filters;
 
 import com.google.common.cache.Cache;
 import com.google.common.cache.CacheBuilder;
 import com.google.common.collect.Lists;
-import org.graylog2.Core;
+import com.google.inject.Inject;
 import org.graylog2.inputs.Input;
-import org.graylog2.plugin.GraylogServer;
+import org.graylog2.inputs.InputService;
 import org.graylog2.plugin.Message;
 import org.graylog2.plugin.filters.MessageFilter;
 import org.graylog2.plugin.inputs.Extractor;
@@ -51,15 +48,22 @@ public class ExtractorFilter implements MessageFilter {
             .expireAfterWrite(1, TimeUnit.SECONDS)
             .build();
 
+    private final InputService inputService;
+
+    @Inject
+    public ExtractorFilter(InputService inputService) {
+        this.inputService = inputService;
+    }
+
     @Override
-    public boolean filter(Message msg, GraylogServer server) {
+    public boolean filter(Message msg) {
         if (msg.getSourceInput() == null) {
             return false;
         }
 
-        for (Extractor extractor : loadExtractors(msg.getSourceInput().getId(), server)) {
+        for (Extractor extractor : loadExtractors(msg.getSourceInput().getId())) {
             try {
-                extractor.runExtractor(server, msg);
+                extractor.runExtractor(msg);
             } catch (Exception e) {
                 extractor.incrementExceptions();
                 LOG.error("Could not apply extractor.", e);
@@ -70,16 +74,16 @@ public class ExtractorFilter implements MessageFilter {
         return false;
     }
 
-    private List<Extractor> loadExtractors(final String inputId, final GraylogServer server) {
+    private List<Extractor> loadExtractors(final String inputId) {
         try {
             return cache.get(inputId, new Callable<List<Extractor>>() {
                 @Override
                 public List<Extractor> call() throws Exception {
                     LOG.debug("Re-loading extractors for input <{}> into cache.", inputId);
 
-                    Input input = Input.find((Core) server, inputId);
+                    Input input = inputService.find(inputId);
 
-                    List<Extractor> sorted = Lists.newArrayList(input.getExtractors());
+                    List<Extractor> sorted = Lists.newArrayList(inputService.getExtractors(input));
 
                     Collections.sort(sorted, new Comparator<Extractor>() {
                         public int compare(Extractor e1, Extractor e2) {
@@ -92,13 +96,19 @@ public class ExtractorFilter implements MessageFilter {
             });
         } catch (ExecutionException e) {
             LOG.error("Could not load extractors into cache. Returning empty list.", e);
-            return Lists.newArrayList();
+            return Collections.emptyList();
         }
     }
 
     @Override
     public String getName() {
         return NAME;
+    }
+
+    @Override
+    public int getPriority() {
+        // runs first of the built-in filters
+        return 10;
     }
 
 }

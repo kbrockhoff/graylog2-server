@@ -1,6 +1,4 @@
 /**
- * Copyright 2013 Lennart Koopmann <lennart@torch.sh>
- *
  * This file is part of Graylog2.
  *
  * Graylog2 is free software: you can redistribute it and/or modify
@@ -15,7 +13,6 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with Graylog2.  If not, see <http://www.gnu.org/licenses/>.
- *
  */
 package org.graylog2.rest.resources.system;
 
@@ -24,12 +21,15 @@ import com.google.common.collect.Lists;
 import com.google.common.collect.Maps;
 import org.graylog2.cluster.Node;
 import org.graylog2.cluster.NodeNotFoundException;
+import org.graylog2.cluster.NodeService;
 import org.graylog2.plugin.Tools;
-import org.graylog2.rest.documentation.annotations.*;
+import org.graylog2.plugin.system.NodeId;
+import com.wordnik.swagger.annotations.*;
 import org.graylog2.rest.resources.RestResource;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javax.inject.Inject;
 import javax.ws.rs.*;
 import javax.ws.rs.core.MediaType;
 import java.util.List;
@@ -45,12 +45,22 @@ public class ClusterResource extends RestResource {
 
     private static final Logger LOG = LoggerFactory.getLogger(ClusterResource.class);
 
+    private final NodeService nodeService;
+    private final NodeId nodeId;
+
+    @Inject
+    public ClusterResource(NodeService nodeService,
+                           NodeId nodeId) {
+        this.nodeService = nodeService;
+        this.nodeId = nodeId;
+    }
+
     @GET @Timed
     @Path("/nodes")
     @ApiOperation(value = "List all active nodes in this cluster.")
     public String nodes() {
         List<Map<String, Object>> nodeList = Lists.newArrayList();
-        Map<String, Node> nodes = Node.allActive(core, Node.Type.SERVER);
+        Map<String, Node> nodes = nodeService.allActive(Node.Type.SERVER);
 
         for(Map.Entry<String, Node> e : nodes.entrySet()) {
             nodeList.add(nodeSummary(e.getValue()));
@@ -68,13 +78,8 @@ public class ClusterResource extends RestResource {
     @ApiOperation(value = "Information about this node.",
             notes = "This is returning information of this node in context to its state in the cluster. " +
                     "Use the system API of the node itself to get system information.")
-    public String node() {
-        try {
-            return json(nodeSummary(Node.thisNode(core)));
-        } catch (NodeNotFoundException e) {
-            // this exception should never happen, if it does we have made it worksn't.(tm)
-            throw new WebApplicationException(500);
-        }
+    public Node node() throws NodeNotFoundException {
+        return nodeService.byNodeId(nodeId);
     }
 
     @GET
@@ -86,26 +91,19 @@ public class ClusterResource extends RestResource {
     @ApiResponses(value = {
             @ApiResponse(code = 404, message = "Node not found.")
     })
-    public String node(@ApiParam(title = "nodeId", required = true) @PathParam("nodeId") String nodeId) {
+    public Node node(@ApiParam(name = "nodeId", required = true) @PathParam("nodeId") String nodeId) throws NodeNotFoundException {
         if (nodeId == null || nodeId.isEmpty()) {
             LOG.error("Missing nodeId. Returning HTTP 400.");
             throw new WebApplicationException(400);
         }
 
-        Node node = Node.byNodeId(core, nodeId);
-
-        if (node == null) {
-            LOG.error("Node <{}> not found.", nodeId);
-            throw new WebApplicationException(404);
-        }
-
-        return json(nodeSummary(node));
+        return nodeService.byNodeId(nodeId);
     }
 
     private Map<String, Object> nodeSummary(Node node) {
         Map<String, Object> m  = Maps.newHashMap();
 
-        m.put("id", node.getNodeId());
+        m.put("node_id", node.getNodeId());
         m.put("type", node.getType().toString().toLowerCase());
         m.put("is_master", node.isMaster());
         m.put("transport_address", node.getTransportAddress());
@@ -116,5 +114,4 @@ public class ClusterResource extends RestResource {
 
         return m;
     }
-
 }

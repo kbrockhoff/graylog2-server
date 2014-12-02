@@ -1,6 +1,4 @@
-/*
- * Copyright 2012-2014 TORCH GmbH
- *
+/**
  * This file is part of Graylog2.
  *
  * Graylog2 is free software: you can redistribute it and/or modify
@@ -16,7 +14,6 @@
  * You should have received a copy of the GNU General Public License
  * along with Graylog2.  If not, see <http://www.gnu.org/licenses/>.
  */
-
 package org.graylog2.streams.matchers;
 
 import com.google.common.cache.CacheBuilder;
@@ -24,6 +21,7 @@ import com.google.common.cache.CacheLoader;
 import com.google.common.cache.LoadingCache;
 import org.graylog2.plugin.Message;
 import org.graylog2.plugin.streams.StreamRule;
+import org.graylog2.utilities.InterruptibleCharSequence;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -51,7 +49,8 @@ public class RegexMatcher implements StreamRuleMatcher {
 
         try {
             Pattern pattern = patternCache.get(rule.getValue());
-            return rule.getInverted() ^ pattern.matcher(msg.getField(rule.getField()).toString()).find();
+            CharSequence charSequence = new InterruptibleCharSequence(msg.getField(rule.getField()).toString());
+            return rule.getInverted() ^ pattern.matcher(charSequence).find();
         } catch (ExecutionException e) {
             LOG.error("Unable to get pattern from regex cache: ", e);
         }

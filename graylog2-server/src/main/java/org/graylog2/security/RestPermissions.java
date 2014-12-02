@@ -1,6 +1,4 @@
 /**
- * Copyright 2013 Kay Roepke <kay@torch.sh>
- *
  * This file is part of Graylog2.
  *
  * Graylog2 is free software: you can redistribute it and/or modify
@@ -15,7 +13,6 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with Graylog2.  If not, see <http://www.gnu.org/licenses/>.
- *
  */
 package org.graylog2.security;
 
@@ -31,7 +28,7 @@ import java.lang.reflect.Modifier;
 import java.util.*;
 
 public class RestPermissions {
-    private static final Logger log = LoggerFactory.getLogger(RestPermissions.class);
+    private static final Logger LOG = LoggerFactory.getLogger(RestPermissions.class);
 
     // These should all be in the form of "group:action", because allPermissions() below depends on it.
     // Should this ever change, you need to adapt the code below, too.
@@ -61,6 +58,9 @@ public class RestPermissions {
     public static final String STREAMS_READ = "streams:read";
     public static final String STREAMS_EDIT = "streams:edit";
     public static final String STREAMS_CHANGESTATE = "streams:changestate";
+    public static final String STREAM_OUTPUTS_CREATE = "stream_outputs:create";
+    public static final String STREAM_OUTPUTS_READ = "stream_outputs:read";
+    public static final String STREAM_OUTPUTS_DELETE = "stream_outputs:delete";
     public static final String INDEXERCLUSTER_READ = "indexercluster:read";
     public static final String INDICES_READ = "indices:read";
     public static final String INDICES_CHANGESTATE = "indices:changestate";
@@ -70,6 +70,10 @@ public class RestPermissions {
     public static final String INPUTS_CREATE = "inputs:create";
     public static final String INPUTS_TERMINATE = "inputs:terminate";
     public static final String INPUTS_EDIT = "inputs:edit";
+    public static final String OUTPUTS_READ = "outputs:read";
+    public static final String OUTPUTS_CREATE = "outputs:create";
+    public static final String OUTPUTS_TERMINATE = "outputs:terminate";
+    public static final String OUTPUTS_EDIT = "outputs:edit";
     public static final String SYSTEMJOBS_READ = "systemjobs:read";
     public static final String SYSTEMJOBS_CREATE = "systemjobs:create";
     public static final String LDAP_EDIT = "ldap:edit";
@@ -96,6 +100,16 @@ public class RestPermissions {
     public static final String THREADS_DUMP = "threads:dump";
     public static final String NODE_SHUTDOWN = "node:shutdown";
     public static final String LBSTATUS_CHANGE = "lbstatus:change";
+    public static final String BLACKLISTENTRY_CREATE = "blacklistentry:create";
+    public static final String BLACKLISTENTRY_READ = "blacklistentry:read";
+    public static final String BLACKLISTENTRY_EDIT = "blacklistentry:edit";
+    public static final String BLACKLISTENTRY_DELETE = "blacklistentry:delete";
+    public static final String BUNDLE_CREATE = "bundle:create";
+    public static final String BUNDLE_READ = "bundle:read";
+    public static final String BUNDLE_UPDATE = "bundle:update";
+    public static final String BUNDLE_DELETE = "bundle:delete";
+    public static final String BUNDLE_IMPORT = "bundle:import";
+    public static final String BUNDLE_EXPORT = "bundle:export";
 
     private static Map<String, Collection<String>> allPermissions;
 
@@ -121,7 +135,7 @@ public class RestPermissions {
     public static Set<String> readerPermissions(String username) {
         final HashSet<String> perms = Sets.newHashSet(readerBasePermissions);
         if (username == null || username.isEmpty()) {
-            log.error("Username cannot be empty or null for creating reader permissions");
+            LOG.error("Username cannot be empty or null for creating reader permissions");
             throw new IllegalArgumentException("Username was null or empty when getting reader permissions.");
         }
         perms.add(perInstance(USERS_EDIT, username));

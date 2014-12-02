@@ -1,3 +1,19 @@
+/**
+ * This file is part of Graylog2.
+ *
+ * Graylog2 is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * Graylog2 is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with Graylog2.  If not, see <http://www.gnu.org/licenses/>.
+ */
 package org.graylog2;
 
 import com.github.joschi.jadconfig.JadConfig;
@@ -6,10 +22,13 @@ import com.github.joschi.jadconfig.ValidationException;
 import com.github.joschi.jadconfig.repositories.InMemoryRepository;
 import com.google.common.collect.Maps;
 import org.testng.Assert;
-import org.testng.annotations.*;
+import org.testng.annotations.AfterClass;
+import org.testng.annotations.BeforeClass;
+import org.testng.annotations.Test;
 
 import java.io.File;
 import java.io.IOException;
+import java.util.HashMap;
 import java.util.Map;
 
 /**
@@ -36,9 +55,6 @@ public class ConfigurationTest {
         // Required properties
         validProperties.put("password_secret", "ipNUnWxmBLCxTEzXcyamrdy0Q3G7HxdKsAvyg30R9SCof0JydiZFiA3dLSkRsbLF");
         validProperties.put("elasticsearch_config_file", tempFile.getAbsolutePath());
-        validProperties.put("force_syslog_rdns", "false");
-        validProperties.put("syslog_listen_port", "514");
-        validProperties.put("syslog_protocol", "udp");
         validProperties.put("mongodb_useauth", "true");
         validProperties.put("mongodb_user", "user");
         validProperties.put("mongodb_password", "pass");
@@ -170,7 +186,7 @@ public class ConfigurationTest {
 
     @Test
     public void testGetMongoDBReplicaSetServersMalformed() throws RepositoryException, ValidationException {
-        validProperties.put("mongodb_replica_set", "malformed");
+        validProperties.put("mongodb_replica_set", "malformed#!#");
         Configuration configuration = new Configuration();
         new JadConfig(new InMemoryRepository(validProperties), configuration).process();
 
@@ -187,6 +203,24 @@ public class ConfigurationTest {
     }
 
     @Test
+    public void testGetMongoDBReplicaSetServersMalformedPort() throws RepositoryException, ValidationException {
+        validProperties.put("mongodb_replica_set", "127.0.0.1:HAHA");
+        Configuration configuration = new Configuration();
+        new JadConfig(new InMemoryRepository(validProperties), configuration).process();
+
+        Assert.assertNull(configuration.getMongoReplicaSet());
+    }
+
+    @Test
+    public void testGetMongoDBReplicaSetServersDefaultPort() throws RepositoryException, ValidationException {
+        validProperties.put("mongodb_replica_set", "127.0.0.1");
+        Configuration configuration = new Configuration();
+        new JadConfig(new InMemoryRepository(validProperties), configuration).process();
+
+        Assert.assertEquals(configuration.getMongoReplicaSet().get(0).getPort(), 27017);
+    }
+
+    @Test
     public void testGetMongoDBReplicaSetServers() throws RepositoryException, ValidationException {
         validProperties.put("mongodb_replica_set", "127.0.0.1:27017,127.0.0.1:27018");
 
@@ -197,33 +231,69 @@ public class ConfigurationTest {
     }
 
     @Test
-    public void testRestTransportUriLocalhost() throws RepositoryException, ValidationException {
-        validProperties.put("rest_listen_uri", "http://127.0.0.1:12900");
+    public void testGetMongoDBReplicaSetServersIPv6() throws RepositoryException, ValidationException {
+        validProperties.put("mongodb_replica_set", "fe80::221:6aff:fe6f:6c88,[fe80::221:6aff:fe6f:6c89]:27018,127.0.0.1:27019");
 
         Configuration configuration = new Configuration();
         new JadConfig(new InMemoryRepository(validProperties), configuration).process();
 
-        Assert.assertEquals("http://127.0.0.1:12900", configuration.getDefaultRestTransportUri().toString());
+        Assert.assertEquals(3, configuration.getMongoReplicaSet().size());
     }
 
     @Test
-    public void testRestTransportUriWildcard() throws RepositoryException, ValidationException {
-        validProperties.put("rest_listen_uri", "http://0.0.0.0:12900");
-
+    public void testDefaultMessageCacheSpoolDir() throws RepositoryException, ValidationException {
         Configuration configuration = new Configuration();
         new JadConfig(new InMemoryRepository(validProperties), configuration).process();
 
-        Assert.assertNotEquals("http://0.0.0.0:12900", configuration.getDefaultRestTransportUri().toString());
-        Assert.assertNotNull(configuration.getDefaultRestTransportUri());
+        Assert.assertEquals(configuration.getMessageCacheSpoolDir(), "spool", "Default message_cache_spool_dir is not 'spool'");
     }
 
     @Test
-    public void testRestTransportUriCustom() throws RepositoryException, ValidationException {
-        validProperties.put("rest_listen_uri", "http://10.0.0.1:12900");
+    public void testMessageCacheSpoolDir() throws RepositoryException, ValidationException {
+        final HashMap<String, String> properties = Maps.newHashMap(validProperties);
+        properties.put("message_cache_spool_dir", "wat?/a/spool/dir");
 
+        Configuration configuration = new Configuration();
+        new JadConfig(new InMemoryRepository(properties), configuration).process();
+
+        Assert.assertEquals(configuration.getMessageCacheSpoolDir(), "wat?/a/spool/dir");
+    }
+
+    @Test
+    public void testDefaultMessageCacheCommitInterval() throws RepositoryException, ValidationException {
         Configuration configuration = new Configuration();
         new JadConfig(new InMemoryRepository(validProperties), configuration).process();
 
-        Assert.assertEquals("http://10.0.0.1:12900", configuration.getDefaultRestTransportUri().toString());
+        Assert.assertEquals(configuration.getMessageCacheCommitInterval(), 1000, "Default message_cache_commit_interval is not '1000'");
+    }
+
+    @Test
+    public void testMessageCacheCommitInterval() throws RepositoryException, ValidationException {
+        final HashMap<String, String> properties = Maps.newHashMap(validProperties);
+        properties.put("message_cache_commit_interval", "4000");
+
+        Configuration configuration = new Configuration();
+        new JadConfig(new InMemoryRepository(properties), configuration).process();
+
+        Assert.assertEquals(configuration.getMessageCacheCommitInterval(), 4000);
+    }
+
+    @Test
+    public void testDefaultMessageCacheOffHeap() throws RepositoryException, ValidationException {
+        Configuration configuration = new Configuration();
+        new JadConfig(new InMemoryRepository(validProperties), configuration).process();
+
+        Assert.assertEquals(configuration.isMessageCacheOffHeap(), true, "Default message_cache_off_heap is not 'true'");
+    }
+
+    @Test
+    public void testMessageCacheOffHeap() throws RepositoryException, ValidationException {
+        final HashMap<String, String> properties = Maps.newHashMap(validProperties);
+        properties.put("message_cache_off_heap", "false");
+
+        Configuration configuration = new Configuration();
+        new JadConfig(new InMemoryRepository(properties), configuration).process();
+
+        Assert.assertEquals(configuration.isMessageCacheOffHeap(), false);
     }
 }

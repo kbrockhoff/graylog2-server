@@ -1,6 +1,4 @@
 /**
- * Copyright 2013 Lennart Koopmann <lennart@torch.sh>
- *
  * This file is part of Graylog2.
  *
  * Graylog2 is free software: you can redistribute it and/or modify
@@ -15,24 +13,13 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with Graylog2.  If not, see <http://www.gnu.org/licenses/>.
- *
  */
 package org.graylog2.rest.resources.dashboards.requests;
 
-import com.fasterxml.jackson.annotation.JsonProperty;
-
 import java.util.Map;
 
-/**
- * @author Lennart Koopmann <lennart@torch.sh>
- */
 public class AddWidgetRequest {
-
     public String description;
     public String type;
     public Map<String, Object> config;
-
-    @JsonProperty("creator_user_id")
-    public String creatorUserId;
-
 }

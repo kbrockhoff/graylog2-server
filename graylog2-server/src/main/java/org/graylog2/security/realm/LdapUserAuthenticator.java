@@ -1,6 +1,4 @@
-/*
- * Copyright 2013 TORCH GmbH
- *
+/**
  * This file is part of Graylog2.
  *
  * Graylog2 is free software: you can redistribute it and/or modify
@@ -22,15 +20,20 @@ import org.apache.directory.api.ldap.model.cursor.CursorException;
 import org.apache.directory.api.ldap.model.exception.LdapException;
 import org.apache.directory.ldap.client.api.LdapConnectionConfig;
 import org.apache.directory.ldap.client.api.LdapNetworkConnection;
-import org.apache.shiro.authc.*;
+import org.apache.shiro.authc.AuthenticationException;
+import org.apache.shiro.authc.AuthenticationInfo;
+import org.apache.shiro.authc.AuthenticationToken;
+import org.apache.shiro.authc.SimpleAccount;
+import org.apache.shiro.authc.UsernamePasswordToken;
 import org.apache.shiro.authc.credential.AllowAllCredentialsMatcher;
 import org.apache.shiro.realm.AuthenticatingRealm;
-import org.graylog2.Core;
 import org.graylog2.security.TrustAllX509TrustManager;
 import org.graylog2.security.ldap.LdapConnector;
 import org.graylog2.security.ldap.LdapEntry;
 import org.graylog2.security.ldap.LdapSettings;
+import org.graylog2.security.ldap.LdapSettingsService;
 import org.graylog2.users.User;
+import org.graylog2.users.UserService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -38,19 +41,19 @@ import java.io.IOException;
 import java.util.concurrent.atomic.AtomicReference;
 
 public class LdapUserAuthenticator extends AuthenticatingRealm {
-    private static final Logger log = LoggerFactory.getLogger(LdapUserAuthenticator.class);
+    private static final Logger LOG = LoggerFactory.getLogger(LdapUserAuthenticator.class);
 
-    private final Core core;
     private final LdapConnector ldapConnector;
 
-    private AtomicReference<LdapSettings> settings;
+    private final AtomicReference<LdapSettings> settings;
+    private final UserService userService;
 
-    public LdapUserAuthenticator(Core core, LdapConnector ldapConnector) {
-        this.core = core;
+    public LdapUserAuthenticator(LdapConnector ldapConnector, LdapSettingsService ldapSettingsService, UserService userService) {
         this.ldapConnector = ldapConnector;
+        this.userService = userService;
         setAuthenticationTokenClass(UsernamePasswordToken.class);
         setCredentialsMatcher(new AllowAllCredentialsMatcher());
-        settings = new AtomicReference<LdapSettings>(LdapSettings.load(core));
+        this.settings = new AtomicReference<LdapSettings>(ldapSettingsService.load());
     }
 
     @Override
@@ -61,7 +64,7 @@ public class LdapUserAuthenticator extends AuthenticatingRealm {
         final LdapConnectionConfig config = new LdapConnectionConfig();
         final LdapSettings ldapSettings = settings.get();
         if (ldapSettings == null || !ldapSettings.isEnabled()) {
-            log.trace("LDAP is disabled, skipping");
+            LOG.trace("LDAP is disabled, skipping");
             return null;
         }
         config.setLdapHost(ldapSettings.getUri().getHost());
@@ -74,49 +77,55 @@ public class LdapUserAuthenticator extends AuthenticatingRealm {
         config.setName(ldapSettings.getSystemUserName());
         config.setCredentials(ldapSettings.getSystemPassword());
 
-        final String principal = String.valueOf(token.getPrincipal());
+        final String principal = (String) token.getPrincipal();
         LdapNetworkConnection connection = null;
         try {
             connection = ldapConnector.connect(config);
+
+            if (null == connection) {
+                LOG.error("Couldn't connect to LDAP directory");
+                return null;
+            }
+
             final String password = String.valueOf(token.getPassword());
 
             final LdapEntry userEntry = ldapConnector.search(connection,
-                                                             ldapSettings.getSearchBase(),
-                                                             ldapSettings.getSearchPattern(),
-                                                             principal,
-                                                             ldapSettings.isActiveDirectory());
+                    ldapSettings.getSearchBase(),
+                    ldapSettings.getSearchPattern(),
+                    principal,
+                    ldapSettings.isActiveDirectory());
             if (userEntry == null) {
-                log.debug("User {} not found in LDAP", principal);
+                LOG.debug("User {} not found in LDAP", principal);
                 return null;
             }
 
             // needs to use the DN of the entry, not the parameter for the lookup filter we used to find the entry!
             final boolean authenticated = ldapConnector.authenticate(connection,
-                                                                     userEntry.getDn(),
-                                                                     password);
+                    userEntry.getDn(),
+                    password);
             if (!authenticated) {
-                log.info("Invalid credentials for user {} (DN {})", principal, userEntry.getDn());
+                LOG.info("Invalid credentials for user {} (DN {})", principal, userEntry.getDn());
                 return null;
             }
             // user found and authenticated, sync the user entry with mongodb
-            final User user = User.syncFromLdapEntry(core, userEntry, ldapSettings, principal);
+            final User user = userService.syncFromLdapEntry(userEntry, ldapSettings, principal);
             if (user == null) {
                 // in case there was an error reading, creating or modifying the user in mongodb, we do not authenticate the user.
-                log.error("Unable to sync LDAP user {}", userEntry.getDn());
+                LOG.error("Unable to sync LDAP user {}", userEntry.getDn());
                 return null;
             }
         } catch (LdapException e) {
-            log.error("LDAP error", e);
+            LOG.error("LDAP error", e);
             return null;
         } catch (CursorException e) {
-            log.error("Unable to read LDAP entry", e);
+            LOG.error("Unable to read LDAP entry", e);
             return null;
         } finally {
             if (connection != null) {
                 try {
                     connection.close();
                 } catch (IOException e) {
-                    log.error("Unable to close LDAP connection", e);
+                    LOG.error("Unable to close LDAP connection", e);
                 }
             }
         }

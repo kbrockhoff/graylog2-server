@@ -1,6 +1,4 @@
 /**
- * Copyright 2012 Lennart Koopmann <lennart@socketfeed.com>
- *
  * This file is part of Graylog2.
  *
  * Graylog2 is free software: you can redistribute it and/or modify
@@ -15,82 +13,105 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with Graylog2.  If not, see <http://www.gnu.org/licenses/>.
- *
  */
-
 package org.graylog2.buffers;
 
+import com.codahale.metrics.InstrumentedExecutorService;
+import com.codahale.metrics.InstrumentedThreadFactory;
 import com.codahale.metrics.Meter;
+import com.codahale.metrics.MetricRegistry;
 import com.google.common.util.concurrent.ThreadFactoryBuilder;
 import com.lmax.disruptor.dsl.Disruptor;
 import com.lmax.disruptor.dsl.ProducerType;
-import org.graylog2.Core;
+import org.graylog2.Configuration;
 import org.graylog2.buffers.processors.OutputBufferProcessor;
 import org.graylog2.inputs.Cache;
-import org.graylog2.plugin.buffers.Buffer;
+import org.graylog2.inputs.OutputCache;
 import org.graylog2.plugin.Message;
+import org.graylog2.plugin.buffers.Buffer;
+import org.graylog2.plugin.buffers.BufferOutOfCapacityException;
 import org.graylog2.plugin.buffers.MessageEvent;
 import org.graylog2.plugin.inputs.MessageInput;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javax.inject.Inject;
+import javax.inject.Singleton;
+import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import org.graylog2.plugin.buffers.BufferOutOfCapacityException;
+import java.util.concurrent.ThreadFactory;
 
 import static com.codahale.metrics.MetricRegistry.name;
 
-/**
- * @author Lennart Koopmann <lennart@socketfeed.com>
- */
+@Singleton
 public class OutputBuffer extends Buffer {
-
     private static final Logger LOG = LoggerFactory.getLogger(OutputBuffer.class);
 
-    protected ExecutorService executor = Executors.newCachedThreadPool(
-            new ThreadFactoryBuilder()
-                .setNameFormat("outputbufferprocessor-%d")
-                .build()
-    );
-    
-    private Core server;
-    
-    private final Cache overflowCache;
+    private final ExecutorService executor;
+
+    private final Configuration configuration;
+    private final OutputCache overflowCache;
 
     private final Meter incomingMessages;
     private final Meter rejectedMessages;
     private final Meter cachedMessages;
 
-    public OutputBuffer(Core server, Cache overflowCache) {
-        this.server = server;
-        this.overflowCache = overflowCache;
+    private final OutputBufferProcessor.Factory outputBufferProcessorFactory;
 
-        incomingMessages = server.metrics().meter(name(OutputBuffer.class, "incomingMessages"));
-        rejectedMessages = server.metrics().meter(name(OutputBuffer.class, "rejectedMessages"));
-        cachedMessages = server.metrics().meter(name(OutputBuffer.class, "cachedMessages"));
+    @Inject
+    public OutputBuffer(OutputBufferProcessor.Factory outputBufferProcessorFactory,
+                        MetricRegistry metricRegistry,
+                        Configuration configuration,
+                        OutputCache overflowCache) {
+        this.outputBufferProcessorFactory = outputBufferProcessorFactory;
+        this.configuration = configuration;
+        this.overflowCache = overflowCache;
+        this.executor = executorService(metricRegistry);
+
+        incomingMessages = metricRegistry.meter(name(OutputBuffer.class, "incomingMessages"));
+        rejectedMessages = metricRegistry.meter(name(OutputBuffer.class, "rejectedMessages"));
+        cachedMessages = metricRegistry.meter(name(OutputBuffer.class, "cachedMessages"));
+    }
+
+    private ExecutorService executorService(final MetricRegistry metricRegistry) {
+        return new InstrumentedExecutorService(Executors.newCachedThreadPool(
+                threadFactory(metricRegistry)), metricRegistry);
+    }
+
+    private ThreadFactory threadFactory(MetricRegistry metricRegistry) {
+        return new InstrumentedThreadFactory(
+                new ThreadFactoryBuilder().setNameFormat("outputbufferprocessor-%d").build(),
+                metricRegistry);
+    }
+
+    public Cache getOverflowCache() {
+        return overflowCache;
     }
 
     public void initialize() {
-        Disruptor disruptor = new Disruptor<MessageEvent>(
+        Disruptor<MessageEvent> disruptor = new Disruptor<>(
                 MessageEvent.EVENT_FACTORY,
-                server.getConfiguration().getRingSize(),
+                configuration.getRingSize(),
                 executor,
                 ProducerType.MULTI,
-                server.getConfiguration().getProcessorWaitStrategy()
+                configuration.getProcessorWaitStrategy()
         );
-        
-        LOG.info("Initialized OutputBuffer with ring size <{}> "
-                + "and wait strategy <{}>.", server.getConfiguration().getRingSize(),
-                server.getConfiguration().getProcessorWaitStrategy().getClass().getSimpleName());
 
-        OutputBufferProcessor[] processors = new OutputBufferProcessor[server.getConfiguration().getOutputBufferProcessors()];
-        
-        for (int i = 0; i < server.getConfiguration().getOutputBufferProcessors(); i++) {
-            processors[i] = new OutputBufferProcessor(this.server, i, server.getConfiguration().getOutputBufferProcessors());
+        LOG.info("Initialized OutputBuffer with ring size <{}> "
+                        + "and wait strategy <{}>.", configuration.getRingSize(),
+                configuration.getProcessorWaitStrategy().getClass().getSimpleName());
+
+        int outputBufferProcessorCount = configuration.getOutputBufferProcessors();
+
+        OutputBufferProcessor[] processors = new OutputBufferProcessor[outputBufferProcessorCount];
+
+        for (int i = 0; i < outputBufferProcessorCount; i++) {
+            processors[i] = outputBufferProcessorFactory.create(i, outputBufferProcessorCount);
         }
-        
+
         disruptor.handleEventsWith(processors);
-        
+
         ringBuffer = disruptor.start();
     }
 
@@ -102,8 +123,9 @@ public class OutputBuffer extends Buffer {
             overflowCache.add(message);
             return;
         }
-        
+
         insert(message);
+        afterInsert(1);
     }
 
     @Override
@@ -113,18 +135,40 @@ public class OutputBuffer extends Buffer {
             rejectedMessages.mark();
             throw new BufferOutOfCapacityException();
         }
-        
+
         insert(message);
-    }
-    
-    private void insert(Message message) {
-        long sequence = ringBuffer.next();
-        MessageEvent event = ringBuffer.get(sequence);
-        event.setMessage(message);
-        ringBuffer.publish(sequence);
-
-        server.outputBufferWatermark().incrementAndGet();
-        incomingMessages.mark();
+        afterInsert(1);
     }
 
+    @Override
+    public void insertCached(List<Message> messages) {
+        int length = messages.size();
+        if (!hasCapacity(length)) {
+            LOG.debug("Out of capacity. Writing to cache.");
+            cachedMessages.mark(length);
+            overflowCache.add(messages);
+            return;
+        }
+
+        insert(messages.toArray(new Message[length]));
+        afterInsert(length);
+    }
+
+    @Override
+    public void insertFailFast(List<Message> messages) throws BufferOutOfCapacityException {
+        int length = messages.size();
+        if (!hasCapacity(length)) {
+            LOG.debug("Rejecting message, because I am full and caching was disabled by input. Raise my size or add more processors.");
+            rejectedMessages.mark(length);
+            throw new BufferOutOfCapacityException();
+        }
+
+        insert(messages.toArray(new Message[length]));
+        afterInsert(length);
+    }
+
+    @Override
+    protected void afterInsert(int n) {
+        incomingMessages.mark(n);
+    }
 }

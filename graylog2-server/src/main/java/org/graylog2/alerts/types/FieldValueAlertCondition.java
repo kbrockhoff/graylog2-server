@@ -1,6 +1,4 @@
 /**
- * Copyright 2013 Lennart Koopmann <lennart@torch.sh>
- *
  * This file is part of Graylog2.
  *
  * Graylog2 is free software: you can redistribute it and/or modify
@@ -15,35 +13,34 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with Graylog2.  If not, see <http://www.gnu.org/licenses/>.
- *
  */
 package org.graylog2.alerts.types;
 
-import org.elasticsearch.search.SearchHits;
-import org.graylog2.Core;
-import org.graylog2.alerts.AlertCondition;
+import com.google.common.collect.Lists;
+import com.google.inject.assistedinject.Assisted;
+import com.google.inject.assistedinject.AssistedInject;
+import org.graylog2.alerts.AbstractAlertCondition;
 import org.graylog2.indexer.IndexHelper;
 import org.graylog2.indexer.results.FieldStatsResult;
 import org.graylog2.indexer.results.ResultMessage;
 import org.graylog2.indexer.searches.Searches;
 import org.graylog2.indexer.searches.timeranges.InvalidRangeParametersException;
 import org.graylog2.indexer.searches.timeranges.RelativeRange;
+import org.graylog2.plugin.Message;
 import org.graylog2.plugin.Tools;
 import org.graylog2.plugin.streams.Stream;
 import org.joda.time.DateTime;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javax.annotation.Nullable;
+import java.text.DecimalFormat;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 
-/**
- * @author Lennart Koopmann <lennart@torch.sh>
- */
-public class FieldValueAlertCondition extends AlertCondition {
-
+public class FieldValueAlertCondition extends AbstractAlertCondition {
     private static final Logger LOG = LoggerFactory.getLogger(FieldValueAlertCondition.class);
-    private List<ResultMessage> searchHits = null;
 
     public enum CheckType {
         MEAN, MIN, MAX, SUM, STDDEV
@@ -53,17 +50,26 @@ public class FieldValueAlertCondition extends AlertCondition {
         LOWER, HIGHER
     }
 
-    private final int grace;
+    public interface Factory {
+        FieldValueAlertCondition createAlertCondition(Stream stream, String id, DateTime createdAt, @Assisted("userid") String creatorUserId, Map<String, Object> parameters);
+    }
+
     private final int time;
     private final ThresholdType thresholdType;
     private final Number threshold;
     private final CheckType type;
     private final String field;
+    private final DecimalFormat decimalFormat;
+    private final Searches searches;
+    private List<Message> searchHits = Collections.emptyList();
 
-    public FieldValueAlertCondition(Core core, Stream stream, String id, DateTime createdAt, String creatorUserId, Map<String, Object> parameters) {
-        super(core, stream, id, Type.FIELD_VALUE, createdAt, creatorUserId, parameters);
+    @AssistedInject
+    public FieldValueAlertCondition(Searches searches, @Assisted Stream stream, @Nullable @Assisted String id, @Assisted DateTime createdAt, @Assisted("userid") String creatorUserId, @Assisted Map<String, Object> parameters) {
+        super(stream, id, Type.FIELD_VALUE, createdAt, creatorUserId, parameters);
+        this.searches = searches;
 
-        this.grace = (Integer) parameters.get("grace");
+        this.decimalFormat = new DecimalFormat("#.###");
+
         this.time = (Integer) parameters.get("time");
         this.thresholdType = ThresholdType.valueOf(((String) parameters.get("threshold_type")).toUpperCase());
         this.threshold = (Number) parameters.get("threshold");
@@ -73,24 +79,26 @@ public class FieldValueAlertCondition extends AlertCondition {
 
     @Override
     public String getDescription() {
-        return new StringBuilder()
-                .append("time: ").append(time)
-                .append(", field: ").append(field)
-                .append(", check type: ").append(type.toString().toLowerCase())
-                .append(", threshold_type: ").append(thresholdType.toString().toLowerCase())
-                .append(", threshold: ").append(threshold)
-                .append(", grace: ").append(grace)
-                .toString();
+        return "time: " + time
+                + ", field: " + field
+                + ", check type: " + type.toString().toLowerCase()
+                + ", threshold_type: " + thresholdType.toString().toLowerCase()
+                + ", threshold: " + decimalFormat.format(threshold)
+                + ", grace: " + grace;
     }
 
     @Override
     protected CheckResult runCheck() {
-        this.searchHits = null;
+        this.searchHits = Collections.emptyList();
         try {
-            String filter = "streams:"+stream.getId();
-            FieldStatsResult fieldStatsResult = core.getIndexer().searches().fieldStats(field, "*", filter, new RelativeRange(time * 60));
-            if (getBacklog() != null && getBacklog() > 0)
-                this.searchHits = fieldStatsResult.getSearchHits();
+            String filter = "streams:" + stream.getId();
+            FieldStatsResult fieldStatsResult = searches.fieldStats(field, "*", filter, new RelativeRange(time * 60));
+            if (getBacklog() != null && getBacklog() > 0) {
+                this.searchHits = Lists.newArrayList();
+                for (ResultMessage resultMessage : fieldStatsResult.getSearchHits()) {
+                    this.searchHits.add(new Message(resultMessage.getMessage()));
+                }
+            }
 
             if (fieldStatsResult.getCount() == 0) {
                 LOG.debug("Alert check <{}> did not match any messages. Returning not triggered.", type);
@@ -121,7 +129,7 @@ public class FieldValueAlertCondition extends AlertCondition {
 
             LOG.debug("Alert check <{}> result: [{}]", id, result);
 
-            if(Double.isInfinite(result)) {
+            if (Double.isInfinite(result)) {
                 // This happens when there are no ES results/docs.
                 LOG.debug("Infinite value. Returning not triggered.");
                 return new CheckResult(false);
@@ -138,17 +146,11 @@ public class FieldValueAlertCondition extends AlertCondition {
             }
 
             if (triggered) {
-                StringBuilder resultDescription = new StringBuilder();
-
-                resultDescription.append("Field ").append(field).append(" had a ")
-                        .append(type.toString().toLowerCase()).append(" of ")
-                        .append(result).append(" in the last ")
-                        .append(time).append(" minutes with trigger condition ")
-                        .append(thresholdType.toString().toLowerCase()).append(" than ")
-                        .append(threshold).append(". ")
-                        .append("(Current grace time: ").append(grace).append(" minutes)");
-
-                return new CheckResult(true, this, resultDescription.toString(), Tools.iso8601());
+                final String resultDescription = "Field " + field + " had a " + type + " of "
+                        + decimalFormat.format(result) + " in the last " + time + " minutes with trigger condition "
+                        + thresholdType + " than " + decimalFormat.format(threshold) + ". "
+                        + "(Current grace time: " + grace + " minutes)";
+                return new CheckResult(true, this, resultDescription, Tools.iso8601());
             } else {
                 return new CheckResult(false);
             }
@@ -167,7 +169,7 @@ public class FieldValueAlertCondition extends AlertCondition {
     }
 
     @Override
-    public List<ResultMessage> getSearchHits() {
+    public List<Message> getSearchHits() {
         return this.searchHits;
     }
 }

@@ -1,6 +1,4 @@
 /**
- * Copyright 2013 Lennart Koopmann <lennart@torch.sh>
- *
  * This file is part of Graylog2.
  *
  * Graylog2 is free software: you can redistribute it and/or modify
@@ -15,7 +13,6 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with Graylog2.  If not, see <http://www.gnu.org/licenses/>.
- *
  */
 package org.graylog2.radio;
 
@@ -24,46 +21,71 @@ import com.codahale.metrics.JmxReporter;
 import com.codahale.metrics.MetricRegistry;
 import com.codahale.metrics.log4j.InstrumentedAppender;
 import com.github.joschi.jadconfig.JadConfig;
+import com.github.joschi.jadconfig.ParameterException;
 import com.github.joschi.jadconfig.RepositoryException;
 import com.github.joschi.jadconfig.ValidationException;
+import com.github.joschi.jadconfig.jodatime.JodaTimeConverterFactory;
+import com.github.joschi.jadconfig.repositories.EnvironmentRepository;
 import com.github.joschi.jadconfig.repositories.PropertiesRepository;
-import org.apache.commons.io.IOUtils;
+import com.github.joschi.jadconfig.repositories.SystemPropertiesRepository;
+import com.google.common.collect.Lists;
+import com.google.common.util.concurrent.ServiceManager;
+import com.google.inject.Injector;
+import com.google.inject.Module;
+import com.google.inject.ProvisionException;
 import org.apache.log4j.Level;
-import org.graylog2.inputs.gelf.http.GELFHttpInput;
-import org.graylog2.inputs.gelf.tcp.GELFTCPInput;
-import org.graylog2.inputs.gelf.udp.GELFUDPInput;
-import org.graylog2.inputs.misc.jsonpath.JsonPathInput;
-import org.graylog2.inputs.misc.metrics.LocalMetricsInput;
-import org.graylog2.inputs.random.FakeHttpMessageInput;
-import org.graylog2.inputs.raw.tcp.RawTCPInput;
-import org.graylog2.inputs.raw.udp.RawUDPInput;
-import org.graylog2.inputs.syslog.tcp.SyslogTCPInput;
-import org.graylog2.inputs.syslog.udp.SyslogUDPInput;
+import org.graylog2.plugin.Plugin;
+import org.graylog2.plugin.PluginModule;
+import org.graylog2.plugin.ServerStatus;
 import org.graylog2.plugin.Tools;
-import org.graylog2.plugin.lifecycles.Lifecycle;
+import org.graylog2.plugin.Version;
+import org.graylog2.plugin.inputs.MessageInput;
+import org.graylog2.radio.bindings.RadioBindings;
+import org.graylog2.radio.bindings.RadioInitializerBindings;
+import org.graylog2.radio.cluster.Ping;
+import org.graylog2.shared.NodeRunner;
+import org.graylog2.shared.bindings.GuiceInjectorHolder;
+import org.graylog2.shared.bindings.GuiceInstantiationService;
+import org.graylog2.shared.initializers.ServiceManagerListener;
+import org.graylog2.shared.plugins.PluginLoader;
+import org.graylog2.shared.system.activities.Activity;
+import org.graylog2.shared.system.activities.ActivityWriter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.bridge.SLF4JBridgeHandler;
 
 import java.io.File;
-import java.io.FileWriter;
-import java.io.Writer;
+import java.util.Arrays;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+
+import static com.google.common.base.Strings.nullToEmpty;
 
 /**
  * @author Lennart Koopmann <lennart@torch.sh>
  */
-public class Main {
+public class Main extends NodeRunner {
 
     private static final Logger LOG = LoggerFactory.getLogger(Main.class);
+    private static final String ENVIRONMENT_PREFIX = "GRAYLOG2_";
+    private static final String PROPERTIES_PREFIX = "graylog2.";
+
+    private static final String profileName = "Radio";
+
+    private static final Version version = Version.CURRENT_CLASSPATH;
 
     /**
      * @param args the command line arguments
      */
     public static void main(String[] args) {
 
+        // So jung kommen wir nicht mehr zusammen.
+
         final CommandLineArguments commandLineArguments = new CommandLineArguments();
         final JCommander jCommander = new JCommander(commandLineArguments, args);
-        jCommander.setProgramName("graylog2-radio");
+        jCommander.setProgramName("graylog2-" + profileName.toLowerCase());
 
         if (commandLineArguments.isShowHelp()) {
             jCommander.usage();
@@ -71,26 +93,26 @@ public class Main {
         }
 
         if (commandLineArguments.isShowVersion()) {
-            System.out.println("Graylog2 Radio " + RadioVersion.VERSION);
+            System.out.println("Graylog2 " + profileName + " " + version);
             System.out.println("JRE: " + Tools.getSystemInformation());
             System.exit(0);
         }
 
-        String configFile = commandLineArguments.getConfigFile();
-        LOG.info("Using config file: {}", configFile);
+        if(commandLineArguments.isDumpDefaultConfig()) {
+            final JadConfig jadConfig = new JadConfig();
+            jadConfig.addConverterFactory(new JodaTimeConverterFactory());
+            jadConfig.addConfigurationBean(new Configuration());
+            System.out.println(dumpConfiguration(jadConfig.dump()));
+            System.exit(0);
+        }
 
-        final Configuration configuration = new Configuration();
-        JadConfig jadConfig = new JadConfig(new PropertiesRepository(configFile), configuration);
+        final JadConfig jadConfig = new JadConfig();
+        jadConfig.addConverterFactory(new JodaTimeConverterFactory());
+        final Configuration configuration = readConfiguration(jadConfig, commandLineArguments.getConfigFile());
 
-        LOG.info("Loading configuration");
-        try {
-            jadConfig.process();
-        } catch (RepositoryException e) {
-            LOG.error("Couldn't load configuration file: [{}]", configFile, e);
-            System.exit(1);
-        } catch (ValidationException e) {
-            LOG.error("Invalid configuration", e);
-            System.exit(1);
+        if (commandLineArguments.isDumpConfig()) {
+            System.out.println(dumpConfiguration(jadConfig.dump()));
+            System.exit(0);
         }
 
         // Are we in debug mode?
@@ -99,9 +121,25 @@ public class Main {
             LOG.info("Running in Debug mode");
             logLevel = Level.DEBUG;
         }
+        org.apache.log4j.Logger.getRootLogger().setLevel(logLevel);
+        org.apache.log4j.Logger.getLogger(Main.class.getPackage().getName()).setLevel(logLevel);
+
+        PluginLoader pluginLoader = new PluginLoader(new File(configuration.getPluginDir()));
+        List<PluginModule> pluginModules = Lists.newArrayList();
+        for (Plugin plugin : pluginLoader.loadPlugins())
+            pluginModules.addAll(plugin.modules());
+
+        LOG.debug("Loaded modules: " + pluginModules);
+
+        final Injector injector = setupInjector(configuration, pluginModules);
+
+        if (injector == null) {
+            LOG.error("Injector could not be created, exiting! (Please include the previous stacktraces in bug reports.)");
+            System.exit(1);
+        }
 
         // This is holding all our metrics.
-        final MetricRegistry metrics = new MetricRegistry();
+        final MetricRegistry metrics = injector.getInstance(MetricRegistry.class);
 
         // Report metrics via JMX.
         final JmxReporter reporter = JmxReporter.forRegistry(metrics).build();
@@ -109,99 +147,139 @@ public class Main {
 
         InstrumentedAppender logMetrics = new InstrumentedAppender(metrics);
         logMetrics.activateOptions();
-        org.apache.log4j.Logger.getRootLogger().setLevel(logLevel);
-        org.apache.log4j.Logger.getLogger(Main.class.getPackage().getName()).setLevel(logLevel);
         org.apache.log4j.Logger.getRootLogger().addAppender(logMetrics);
 
         SLF4JBridgeHandler.removeHandlersForRootLogger();
         SLF4JBridgeHandler.install();
 
-        LOG.info("Graylog2 Radio {} starting up. (JRE: {})", Radio.VERSION, Tools.getSystemInformation());
+        LOG.info("Graylog2 " + profileName + " {} starting up. (JRE: {})", version, Tools.getSystemInformation());
 
         // Do not use a PID file if the user requested not to
         if (!commandLineArguments.isNoPidFile()) {
             savePidFile(commandLineArguments.getPidFile());
         }
 
-        Radio radio = new Radio();
-        radio.setLifecycle(Lifecycle.STARTING);
+        final ServerStatus serverStatus = injector.getInstance(ServerStatus.class);
+        serverStatus.initialize();
 
+        // register node by initiating first ping. if the node isn't registered, loading persisted inputs will fail silently, for example
+        Ping.Pinger pinger = injector.getInstance(Ping.Pinger.class);
+        pinger.ping();
+
+        final ActivityWriter activityWriter;
+        final ServiceManager serviceManager;
         try {
-            radio.initialize(configuration, metrics);
-        } catch(Exception e) {
-            LOG.error("Initialization error.", e);
-            System.exit(1);
-        }
-
-        // Register in Graylog2 cluster.
-        radio.ping();
-
-        // Start regular pinging Graylog2 cluster to show that we are alive.
-        radio.startPings();
-
-        // Start REST API.
-        try {
-            radio.startRestApi();
-        } catch(Exception e) {
-            LOG.error("Could not start REST API on <{}>. Terminating.", configuration.getRestListenUri(), e);
-            System.exit(1);
-        }
-
-        // Try loading persisted inputs. Retry until server connection succeeds.
-        while(true) {
-            try {
-                radio.launchPersistedInputs();
-                break;
-            } catch(Exception e) {
-                LOG.error("Could not load persisted inputs. Trying again in one second.", e);
-                try {
-                    Thread.sleep(1000);
-                } catch (InterruptedException e1) {
-                    return;
-                }
-            }
-        }
-
-        // Register inputs. (find an automatic way here (annotations?) and do the same in graylog2-server.Main
-        radio.inputs().register(SyslogUDPInput.class, SyslogUDPInput.NAME);
-        radio.inputs().register(SyslogTCPInput.class, SyslogTCPInput.NAME);
-        radio.inputs().register(RawUDPInput.class, RawUDPInput.NAME);
-        radio.inputs().register(RawTCPInput.class, RawTCPInput.NAME);
-        radio.inputs().register(GELFUDPInput.class, GELFUDPInput.NAME);
-        radio.inputs().register(GELFTCPInput.class, GELFTCPInput.NAME);
-        radio.inputs().register(GELFHttpInput.class, GELFHttpInput.NAME);
-        radio.inputs().register(FakeHttpMessageInput.class, FakeHttpMessageInput.NAME);
-        radio.inputs().register(LocalMetricsInput.class, LocalMetricsInput.NAME);
-        radio.inputs().register(JsonPathInput.class, JsonPathInput.NAME);
-
-        radio.setLifecycle(Lifecycle.RUNNING);
-        LOG.info("Graylog2 Radio up and running.");
-
-        while (true) {
-            try { Thread.sleep(1000); } catch (InterruptedException e) { /* lol, i don't care */ }
-        }
-    }
-
-    private static void savePidFile(String pidFile) {
-
-        String pid = Tools.getPID();
-        Writer pidFileWriter = null;
-
-        try {
-            if (pid == null || pid.isEmpty() || pid.equals("unknown")) {
-                throw new Exception("Could not determine PID.");
-            }
-
-            pidFileWriter = new FileWriter(pidFile);
-            IOUtils.write(pid, pidFileWriter);
+            activityWriter = injector.getInstance(ActivityWriter.class);
+            serviceManager = injector.getInstance(ServiceManager.class);
+        } catch (ProvisionException e) {
+            LOG.error("Guice error", e);
+            System.exit(-1);
+            return;
         } catch (Exception e) {
-            LOG.error("Could not write PID file: " + e.getMessage(), e);
-            System.exit(1);
-        } finally {
-            IOUtils.closeQuietly(pidFileWriter);
-            // make sure to remove our pid when we exit
-            new File(pidFile).deleteOnExit();
+            LOG.error("Unexpected exception", e);
+            System.exit(-1);
+            return;
+        }
+
+        Runtime.getRuntime().addShutdownHook(new Thread() {
+            @Override
+            public void run() {
+                String msg = "SIGNAL received. Shutting down.";
+                LOG.info(msg);
+                activityWriter.write(new Activity(msg, Main.class));
+
+                serviceManager.stopAsync().awaitStopped();
+            }
+        });
+
+        // propagate default size to input plugins
+        MessageInput.setDefaultRecvBufferSize(configuration.getUdpRecvBufferSizes());
+
+        // Start services.
+        final ServiceManagerListener serviceManagerListener = injector.getInstance(ServiceManagerListener.class);
+        serviceManager.addListener(serviceManagerListener);
+        try {
+        serviceManager.startAsync().awaitHealthy();
+        } catch (Exception e) {
+            try {
+                serviceManager.stopAsync().awaitStopped(configuration.getShutdownTimeout(), TimeUnit.MILLISECONDS);
+            } catch (TimeoutException timeoutException) {
+                LOG.error("Unable to shutdown properly on time. {}", serviceManager.servicesByState());
+            }
+            LOG.error("Graylog2 startup failed. Exiting. Exception was:", e);
+            System.exit(-1);
+        }
+        LOG.info("Services started, startup times in ms: {}", serviceManager.startupTimes());
+
+        activityWriter.write(new Activity("Started up.", Main.class));
+        LOG.info("Graylog2 " + profileName + " up and running.");
+
+        // Block forever.
+        try {
+            while (true) {
+                Thread.sleep(1000);
+            }
+        } catch (InterruptedException e) {
+            return;
         }
     }
 
+    private static Injector setupInjector(Configuration configuration, List<PluginModule> pluginModules) {
+        try {
+            GuiceInstantiationService instantiationService = new GuiceInstantiationService();
+            List<Module> bindingsModules = getBindingsModules(instantiationService,
+                    new RadioBindings(configuration),
+                    new RadioInitializerBindings());
+            LOG.debug("Adding plugin modules: " + pluginModules);
+            bindingsModules.addAll(pluginModules);
+            final Injector injector = GuiceInjectorHolder.createInjector(bindingsModules);
+            instantiationService.setInjector(injector);
+
+            return injector;
+        } catch (Exception e) {
+            LOG.error("Injector creation failed!", e);
+            return null;
+        }
+    }
+
+    private static String dumpConfiguration(final Map<String, String> configMap) {
+        final StringBuilder sb = new StringBuilder();
+        sb.append("# Configuration of graylog2-").append(profileName).append(" ").append(version).append(System.lineSeparator());
+        sb.append("# Generated on ").append(Tools.iso8601()).append(System.lineSeparator());
+
+        for (Map.Entry<String, String> entry : configMap.entrySet()) {
+            sb.append(entry.getKey()).append('=').append(nullToEmpty(entry.getValue())).append(System.lineSeparator());
+        }
+
+        return sb.toString();
+    }
+
+    private static Configuration readConfiguration(final JadConfig jadConfig, final String configFile) {
+        final Configuration configuration = new Configuration();
+
+        jadConfig.addConfigurationBean(configuration);
+        jadConfig.setRepositories(Arrays.asList(
+                new EnvironmentRepository(ENVIRONMENT_PREFIX),
+                new SystemPropertiesRepository(PROPERTIES_PREFIX),
+                new PropertiesRepository(configFile)
+        ));
+
+        LOG.debug("Loading configuration from config file: {}", configFile);
+        try {
+            jadConfig.process();
+        } catch (RepositoryException e) {
+            LOG.error("Couldn't load configuration: {}", e.getMessage());
+            System.exit(1);
+        } catch (ParameterException | ValidationException e) {
+            LOG.error("Invalid configuration", e);
+            System.exit(1);
+        }
+
+        if (configuration.getRestTransportUri() == null) {
+            configuration.setRestTransportUri(configuration.getDefaultRestTransportUri());
+            LOG.debug("No rest_transport_uri set. Using default [{}].", configuration.getRestTransportUri());
+        }
+
+        return configuration;
+    }
 }

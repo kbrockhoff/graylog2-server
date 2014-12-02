@@ -1,6 +1,4 @@
 /**
- * Copyright 2013 Lennart Koopmann <lennart@torch.sh>
- *
  * This file is part of Graylog2.
  *
  * Graylog2 is free software: you can redistribute it and/or modify
@@ -15,50 +13,55 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with Graylog2.  If not, see <http://www.gnu.org/licenses/>.
- *
  */
 package org.graylog2.alerts.types;
 
-import org.elasticsearch.search.SearchHits;
-import org.graylog2.Core;
-import org.graylog2.alerts.AlertCondition;
+import com.google.common.collect.Lists;
+import com.google.inject.assistedinject.Assisted;
+import com.google.inject.assistedinject.AssistedInject;
+import org.graylog2.alerts.AbstractAlertCondition;
 import org.graylog2.indexer.IndexHelper;
 import org.graylog2.indexer.results.CountResult;
 import org.graylog2.indexer.results.ResultMessage;
 import org.graylog2.indexer.results.SearchResult;
+import org.graylog2.indexer.searches.Searches;
 import org.graylog2.indexer.searches.Sorting;
 import org.graylog2.indexer.searches.timeranges.InvalidRangeParametersException;
 import org.graylog2.indexer.searches.timeranges.RelativeRange;
+import org.graylog2.plugin.Message;
 import org.graylog2.plugin.Tools;
 import org.graylog2.plugin.streams.Stream;
 import org.joda.time.DateTime;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javax.annotation.Nullable;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 
-/**
- * @author Lennart Koopmann <lennart@torch.sh>
- */
-public class MessageCountAlertCondition extends AlertCondition {
-
+public class MessageCountAlertCondition extends AbstractAlertCondition {
     private static final Logger LOG = LoggerFactory.getLogger(MessageCountAlertCondition.class);
 
     public enum ThresholdType {
         MORE, LESS
     }
 
-    private final int grace;
+    public interface Factory {
+        MessageCountAlertCondition createAlertCondition(Stream stream, String id, DateTime createdAt, @Assisted("userid") String creatorUserId, Map<String, Object> parameters);
+    }
+
     private final int time;
     private final ThresholdType thresholdType;
     private final int threshold;
-    private List<ResultMessage> searchHits = null;
+    private List<Message> searchHits = Collections.emptyList();
+    private final Searches searches;
 
-    public MessageCountAlertCondition(Core core, Stream stream, String id, DateTime createdAt, String creatorUserId, Map<String, Object> parameters) {
-        super(core, stream, id, Type.MESSAGE_COUNT, createdAt, creatorUserId, parameters);
+    @AssistedInject
+    public MessageCountAlertCondition(Searches searches, @Assisted Stream stream, @Nullable @Assisted String id, @Assisted DateTime createdAt, @Assisted("userid") String creatorUserId, @Assisted Map<String, Object> parameters) {
+        super(stream, id, Type.MESSAGE_COUNT, createdAt, creatorUserId, parameters);
 
-        this.grace = (Integer) parameters.get("grace");
+        this.searches = searches;
         this.time = (Integer) parameters.get("time");
         this.thresholdType = ThresholdType.valueOf(((String) parameters.get("threshold_type")).toUpperCase());
         this.threshold = (Integer) parameters.get("threshold");
@@ -66,20 +69,18 @@ public class MessageCountAlertCondition extends AlertCondition {
 
     @Override
     public String getDescription() {
-        return new StringBuilder()
-                .append("time: ").append(time)
-                .append(", threshold_type: ").append(thresholdType.toString().toLowerCase())
-                .append(", threshold: ").append(threshold)
-                .append(", grace: ").append(grace)
-                .toString();
+        return "time: " + time
+                + ", threshold_type: " + thresholdType.toString().toLowerCase()
+                + ", threshold: " + threshold
+                + ", grace: " + grace;
     }
 
     @Override
     protected CheckResult runCheck() {
-        this.searchHits = null;
+        this.searchHits = Collections.emptyList();
         try {
-            String filter = "streams:"+stream.getId();
-            CountResult result = core.getIndexer().searches().count("*", new RelativeRange(time * 60), filter);
+            String filter = "streams:" + stream.getId();
+            CountResult result = searches.count("*", new RelativeRange(time * 60), filter);
             long count = result.getCount();
 
             LOG.debug("Alert check <{}> result: [{}]", id, count);
@@ -97,19 +98,17 @@ public class MessageCountAlertCondition extends AlertCondition {
             if (triggered) {
                 Integer backlogSize = getBacklog();
                 if (backlogSize != null && backlogSize > 0) {
-                    SearchResult backlogResult = core.getIndexer().searches().search("*", filter, new RelativeRange(time * 60), backlogSize, 0, new Sorting("timestamp", Sorting.Direction.DESC));
-                    this.searchHits = backlogResult.getResults();
+                    SearchResult backlogResult = searches.search("*", filter, new RelativeRange(time * 60), backlogSize, 0, new Sorting("timestamp", Sorting.Direction.DESC));
+                    this.searchHits = Lists.newArrayList();
+                    for (ResultMessage resultMessage : backlogResult.getResults()) {
+                        searchHits.add(new Message(resultMessage.getMessage()));
+                    }
                 }
 
-                StringBuilder resultDescription = new StringBuilder();
-
-                resultDescription.append("Stream had ").append(count).append(" messages in the last ")
-                        .append(time).append(" minutes with trigger condition ")
-                        .append(thresholdType.toString().toLowerCase()).append(" than ")
-                        .append(threshold).append(" messages. ")
-                        .append("(Current grace time: ").append(grace).append(" minutes)");
-
-                return new CheckResult(true, this, resultDescription.toString(), Tools.iso8601());
+                final String resultDescription = "Stream had " + count + " messages in the last " + time
+                        + " minutes with trigger condition " + thresholdType.toString().toLowerCase()
+                        + " than " + threshold + " messages. " + "(Current grace time: " + grace + " minutes)";
+                return new CheckResult(true, this, resultDescription, Tools.iso8601());
             } else {
                 return new CheckResult(false);
             }
@@ -125,7 +124,7 @@ public class MessageCountAlertCondition extends AlertCondition {
     }
 
     @Override
-    public List<ResultMessage> getSearchHits() {
+    public List<Message> getSearchHits() {
         return this.searchHits;
     }
 }

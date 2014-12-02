@@ -1,6 +1,4 @@
 /**
- * Copyright 2013 Lennart Koopmann <lennart@torch.sh>
- *
  * This file is part of Graylog2.
  *
  * Graylog2 is free software: you can redistribute it and/or modify
@@ -15,30 +13,34 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with Graylog2.  If not, see <http://www.gnu.org/licenses/>.
- *
  */
 package org.graylog2.rest.resources.system.logs;
 
 import com.codahale.metrics.annotation.Timed;
+import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Maps;
+import com.wordnik.swagger.annotations.Api;
+import com.wordnik.swagger.annotations.ApiOperation;
+import com.wordnik.swagger.annotations.ApiParam;
+import com.wordnik.swagger.annotations.ApiResponse;
+import com.wordnik.swagger.annotations.ApiResponses;
 import org.apache.log4j.Level;
 import org.apache.log4j.Logger;
 import org.apache.shiro.authz.annotation.RequiresAuthentication;
-import org.graylog2.rest.documentation.annotations.*;
 import org.graylog2.rest.resources.RestResource;
 import org.graylog2.security.RestPermissions;
 import org.slf4j.LoggerFactory;
 
-import javax.ws.rs.*;
+import javax.ws.rs.GET;
+import javax.ws.rs.PUT;
+import javax.ws.rs.Path;
+import javax.ws.rs.PathParam;
+import javax.ws.rs.Produces;
 import javax.ws.rs.core.MediaType;
 import javax.ws.rs.core.Response;
 import java.util.Enumeration;
-import java.util.HashMap;
 import java.util.Map;
 
-/**
- * @author Lennart Koopmann <lennart@torch.sh>
- */
 @RequiresAuthentication
 @Api(value = "System/Loggers", description = "Internal Graylog2 loggers")
 @Path("/system/loggers")
@@ -46,21 +48,21 @@ public class LoggersResource extends RestResource {
 
     private static final org.slf4j.Logger LOG = LoggerFactory.getLogger(LoggersResource.class);
 
-    private static final Map<String, Subsystem> SUBSYSTEMS = new HashMap<String, Subsystem>() {{
-        put("graylog2", new Subsystem("Graylog2", "org.graylog2", "All messages from graylog2-owned systems."));
-        put("indexer", new Subsystem("Indexer", "org.elasticsearch", "All messages related to indexing and searching."));
-        put("authentication", new Subsystem("Authentication", "org.apache.shiro", "All user authentication messages."));
-        put("sockets", new Subsystem("Sockets", "netty", "All messages related to socket communication."));
-    }};
+    private static final Map<String, Subsystem> SUBSYSTEMS = ImmutableMap.<String, Subsystem>of(
+            "graylog2", new Subsystem("Graylog2", "org.graylog2", "All messages from graylog2-owned systems."),
+            "indexer", new Subsystem("Indexer", "org.elasticsearch", "All messages related to indexing and searching."),
+            "authentication", new Subsystem("Authentication", "org.apache.shiro", "All user authentication messages."),
+            "sockets", new Subsystem("Sockets", "netty", "All messages related to socket communication."));
 
-    @GET @Timed
+    @GET
+    @Timed
     @ApiOperation(value = "List all loggers and their current levels")
     @Produces(MediaType.APPLICATION_JSON)
     public String loggers() {
         Map<String, Object> loggerList = Maps.newHashMap();
 
         Enumeration loggers = Logger.getRootLogger().getLoggerRepository().getCurrentLoggers();
-        while(loggers.hasMoreElements()) {
+        while (loggers.hasMoreElements()) {
             Logger logger = (Logger) loggers.nextElement();
             if (!isPermitted(RestPermissions.LOGGERS_READ, logger.getName())) {
                 continue;
@@ -79,7 +81,8 @@ public class LoggersResource extends RestResource {
         return json(result);
     }
 
-    @GET @Timed
+    @GET
+    @Timed
     @Path("/subsystems")
     @ApiOperation(value = "List all logger subsystems and their current levels")
     @Produces(MediaType.APPLICATION_JSON)
@@ -87,7 +90,7 @@ public class LoggersResource extends RestResource {
         Map<String, Object> result = Maps.newHashMap();
         Map<String, Object> subsystems = Maps.newHashMap();
 
-        for(Map.Entry<String, Subsystem> subsystem : SUBSYSTEMS.entrySet()) {
+        for (Map.Entry<String, Subsystem> subsystem : SUBSYSTEMS.entrySet()) {
             if (!isPermitted(RestPermissions.LOGGERS_READSUBSYSTEM, subsystem.getKey())) {
                 continue;
             }
@@ -103,7 +106,7 @@ public class LoggersResource extends RestResource {
                 info.put("level_syslog", effectiveLevel.getSyslogEquivalent());
 
                 subsystems.put(subsystem.getKey(), info);
-            } catch(Exception e) {
+            } catch (Exception e) {
                 LOG.error("Error while listing logger subsystem.", e);
                 continue;
             }
@@ -114,16 +117,17 @@ public class LoggersResource extends RestResource {
         return json(result);
     }
 
-    @PUT @Timed
+    @PUT
+    @Timed
     @ApiOperation(value = "Set the loglevel of a whole subsystem",
-                  notes = "Provided level is falling back to DEBUG if it does not exist")
+            notes = "Provided level is falling back to DEBUG if it does not exist")
     @ApiResponses(value = {
             @ApiResponse(code = 404, message = "No such subsystem.")
     })
     @Path("/subsystems/{subsystem}/level/{level}")
     public Response setSubsystemLoggerLevel(
-            @ApiParam(title = "subsystem", required = true) @PathParam("subsystem") String subsystemTitle,
-            @ApiParam(title = "level", required = true) @PathParam("level") String level) {
+            @ApiParam(name = "subsystem", required = true) @PathParam("subsystem") String subsystemTitle,
+            @ApiParam(name = "level", required = true) @PathParam("level") String level) {
         if (!SUBSYSTEMS.containsKey(subsystemTitle)) {
             LOG.warn("No such subsystem: [{}]. Returning 404.", subsystemTitle);
             return Response.status(404).build();
@@ -141,13 +145,14 @@ public class LoggersResource extends RestResource {
         return Response.ok().build();
     }
 
-    @PUT @Timed
+    @PUT
+    @Timed
     @ApiOperation(value = "Set the loglevel of a single logger",
             notes = "Provided level is falling back to DEBUG if it does not exist")
     @Path("/{loggerName}/level/{level}")
     public Response setSingleLoggerLevel(
-            @ApiParam(title = "loggerName", required = true) @PathParam("loggerName") String loggerName,
-            @ApiParam(title = "level", required = true) @PathParam("level") String level) {
+            @ApiParam(name = "loggerName", required = true) @PathParam("loggerName") String loggerName,
+            @ApiParam(name = "level", required = true) @PathParam("level") String level) {
         checkPermission(RestPermissions.LOGGERS_EDIT, loggerName);
         // This is never null. Worst case is a logger that does not exist.
         Logger logger = Logger.getLogger(loggerName);

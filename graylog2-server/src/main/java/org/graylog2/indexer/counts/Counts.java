@@ -1,6 +1,4 @@
 /**
- * Copyright 2013 Lennart Koopmann <lennart@socketfeed.com>
- *
  * This file is part of Graylog2.
  *
  * Graylog2 is free software: you can redistribute it and/or modify
@@ -15,47 +13,32 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with Graylog2.  If not, see <http://www.gnu.org/licenses/>.
- *
  */
-
 package org.graylog2.indexer.counts;
 
+import com.google.inject.Inject;
+import com.google.inject.Singleton;
 import org.elasticsearch.action.count.CountRequest;
-import org.elasticsearch.action.count.CountRequestBuilder;
-import org.elasticsearch.action.search.SearchRequestBuilder;
-import org.elasticsearch.action.search.SearchResponse;
 import org.elasticsearch.client.Client;
-import org.elasticsearch.index.query.QueryStringQueryBuilder;
-import org.elasticsearch.search.facet.FacetBuilders;
-import org.elasticsearch.search.facet.datehistogram.DateHistogramFacet;
-import org.elasticsearch.search.facet.datehistogram.DateHistogramFacetBuilder;
-import org.graylog2.Core;
-import org.graylog2.indexer.IndexHelper;
-import org.graylog2.indexer.Indexer;
-import org.graylog2.indexer.results.DateHistogramResult;
-import org.graylog2.indexer.searches.timeranges.TimeRange;
-import org.graylog2.plugin.streams.Stream;
-
-import java.util.Set;
-
-import static org.elasticsearch.index.query.QueryBuilders.matchAllQuery;
-import static org.elasticsearch.index.query.QueryBuilders.queryString;
+import org.elasticsearch.node.Node;
+import org.graylog2.indexer.Deflector;
 
 /**
  * @author Lennart Koopmann <lennart@socketfeed.com>
  */
+@Singleton
 public class Counts {
+    private final Client c;
+    private final Deflector deflector;
 
-	private final Core server;
-	private final Client c;
-	
-	public Counts(Client client, Core server) {
-		this.server = server;
-		this.c = client;
-	}
+    @Inject
+    public Counts(Node node, Deflector deflector) {
+        this.c = node.client();
+        this.deflector = deflector;
+    }
 
     public long total() {
-        return c.count(new CountRequest(server.getDeflector().getAllDeflectorIndexNames())).actionGet().getCount();
+        return c.count(new CountRequest(deflector.getAllDeflectorIndexNames())).actionGet().getCount();
     }
-	
+
 }

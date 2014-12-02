@@ -3,7 +3,7 @@
   <parent>
     <artifactId>graylog2-parent</artifactId>
     <groupId>org.graylog2</groupId>
-    <version>0.20.2.SXM</version>
+    <version>0.92.0.SXM</version>
   </parent>
   <modelVersion>4.0.0</modelVersion>
   <artifactId>graylog2-radio</artifactId>
@@ -11,7 +11,7 @@
   <description>Graylog2 radio</description>
   <url>http://www.graylog2.org/</url>
   <prerequisites>
-    <maven>3.0.0</maven>
+    <maven>3.0.1</maven>
   </prerequisites>
   <licenses>
     <license>
@@ -21,10 +21,21 @@
     </license>
   </licenses>
   <build>
+    <resources>
+      <resource>
+        <filtering>true</filtering>
+        <directory>src/main/resources</directory>
+        <includes>
+          <include>**/*.properties</include>
+        </includes>
+      </resource>
+      <resource>
+        <directory>src/main/resources</directory>
+      </resource>
+    </resources>
     <plugins>
       <plugin>
         <artifactId>maven-jar-plugin</artifactId>
-        <version>2.4</version>
         <configuration>
           <finalName>graylog2-radio</finalName>
           <archive>
@@ -36,7 +47,6 @@
       </plugin>
       <plugin>
         <artifactId>maven-shade-plugin</artifactId>
-        <version>2.1</version>
         <executions>
           <execution>
             <phase>package</phase>
@@ -52,77 +62,83 @@
               <mainClass>${mainClass}</mainClass>
             </transformer>
           </transformers>
+          <minimizeJar>false</minimizeJar>
         </configuration>
       </plugin>
       <plugin>
-        <artifactId>maven-source-plugin</artifactId>
-        <version>2.2.1</version>
+        <groupId>pl.project13.maven</groupId>
+        <artifactId>git-commit-id-plugin</artifactId>
         <executions>
           <execution>
-            <id>attach-sources</id>
+            <phase>generate-resources</phase>
             <goals>
-              <goal>jar</goal>
+              <goal>revision</goal>
             </goals>
           </execution>
         </executions>
-      </plugin>
-      <plugin>
-        <artifactId>maven-javadoc-plugin</artifactId>
-        <version>2.9</version>
-        <executions>
-          <execution>
-            <id>attach-javadocs</id>
-            <goals>
-              <goal>jar</goal>
-            </goals>
-          </execution>
-        </executions>
-      </plugin>
-      <plugin>
-        <artifactId>maven-site-plugin</artifactId>
-        <version>3.2</version>
         <configuration>
-          <reportPlugins>
-            <plugin>
-              <groupId>org.apache.maven.plugins</groupId>
-              <artifactId>maven-project-info-reports-plugin</artifactId>
-              <version>2.6</version>
-              <configuration>
-                <dependencyLocationsEnabled>false</dependencyLocationsEnabled>
-                <dependencyDetailsEnabled>false</dependencyDetailsEnabled>
-              </configuration>
-            </plugin>
-            <plugin>
-              <groupId>org.apache.maven.plugins</groupId>
-              <artifactId>maven-javadoc-plugin</artifactId>
-              <version>2.9</version>
-            </plugin>
-            <plugin>
-              <groupId>org.codehaus.mojo</groupId>
-              <artifactId>findbugs-maven-plugin</artifactId>
-              <version>2.5.2</version>
-            </plugin>
-          </reportPlugins>
+          <prefix>git</prefix>
+          <dateFormat>dd.MM.yyyy '@' HH:mm:ss z</dateFormat>
+          <verbose>false</verbose>
+          <useNativeGit>true</useNativeGit>
+          <dotGitDirectory>${project.parent.relativePath}/.git</dotGitDirectory>
+          <skipPoms>true</skipPoms>
+          <failOnNoGitDirectory>false</failOnNoGitDirectory>
+          <abbrevLength>7</abbrevLength>
+          <skip>false</skip>
         </configuration>
+      </plugin>
+      <plugin>
+        <artifactId>maven-assembly-plugin</artifactId>
+        <configuration>
+          <attach>false</attach>
+          <appendAssemblyId>false</appendAssemblyId>
+          <descriptors>
+            <descriptor>src/main/assembly/graylog2-radio.xml</descriptor>
+          </descriptors>
+          <outputDirectory>${project.parent.build.directory}/assembly</outputDirectory>
+          <finalName>${project.artifactId}-${project.version}-${maven.build.timestamp}</finalName>
+        </configuration>
+      </plugin>
+      <plugin>
+        <groupId>com.mycila</groupId>
+        <artifactId>license-maven-plugin</artifactId>
       </plugin>
     </plugins>
   </build>
+  <profiles>
+    <profile>
+      <id>release</id>
+      <build>
+        <plugins>
+          <plugin>
+            <artifactId>maven-assembly-plugin</artifactId>
+            <configuration>
+              <finalName>${project.artifactId}-${project.version}</finalName>
+            </configuration>
+          </plugin>
+        </plugins>
+      </build>
+    </profile>
+  </profiles>
   <dependencies>
     <dependency>
       <groupId>org.testng</groupId>
       <artifactId>testng</artifactId>
-      <version>6.1.1</version>
+      <version>6.8.8</version>
       <scope>test</scope>
       <exclusions>
         <exclusion>
           <artifactId>bsh</artifactId>
           <groupId>org.beanshell</groupId>
         </exclusion>
-        <exclusion>
-          <artifactId>snakeyaml</artifactId>
-          <groupId>org.yaml</groupId>
-        </exclusion>
       </exclusions>
+    </dependency>
+    <dependency>
+      <groupId>org.mockito</groupId>
+      <artifactId>mockito-all</artifactId>
+      <version>1.9.5</version>
+      <scope>test</scope>
     </dependency>
   </dependencies>
   <properties>

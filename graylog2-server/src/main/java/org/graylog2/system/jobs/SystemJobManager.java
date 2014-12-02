@@ -1,6 +1,4 @@
 /**
- * Copyright 2013 Lennart Koopmann <lennart@torch.sh>
- *
  * This file is part of Graylog2.
  *
  * Graylog2 is free software: you can redistribute it and/or modify
@@ -15,53 +13,59 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with Graylog2.  If not, see <http://www.gnu.org/licenses/>.
- *
  */
 package org.graylog2.system.jobs;
 
+import com.codahale.metrics.InstrumentedExecutorService;
+import com.codahale.metrics.InstrumentedThreadFactory;
+import com.codahale.metrics.MetricRegistry;
 import com.eaio.uuid.UUID;
 import com.google.common.base.Stopwatch;
 import com.google.common.util.concurrent.ThreadFactoryBuilder;
-import org.graylog2.Core;
-import org.graylog2.system.activities.Activity;
+import org.graylog2.shared.system.activities.Activity;
+import org.graylog2.shared.system.activities.ActivityWriter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javax.inject.Inject;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
 
-/**
- * @author Lennart Koopmann <lennart@torch.sh>
- */
 public class SystemJobManager {
-
     private static final Logger LOG = LoggerFactory.getLogger(SystemJobManager.class);
-
-    private final Core server;
-
     private static final int THREAD_POOL_SIZE = 15;
 
-    private ExecutorService executor = Executors.newFixedThreadPool(
-            THREAD_POOL_SIZE,
-            new ThreadFactoryBuilder().setNameFormat("systemjob-executor-%d").build()
-    );
-
+    private final ActivityWriter activityWriter;
+    private final ExecutorService executor;
     private final Map<String, SystemJob> jobs;
 
-    public SystemJobManager(Core server) {
-        this.server = server;
+    @Inject
+    public SystemJobManager(ActivityWriter activityWriter, MetricRegistry metricRegistry) {
+        this.activityWriter = activityWriter;
+        this.executor = executorService(metricRegistry);
+        this.jobs = new ConcurrentHashMap<>();
+    }
 
-        jobs = new ConcurrentHashMap<String, SystemJob>();
+    private ExecutorService executorService(final MetricRegistry metricRegistry) {
+        return new InstrumentedExecutorService(
+                Executors.newFixedThreadPool(THREAD_POOL_SIZE, threadFactory(metricRegistry)), metricRegistry);
+    }
+
+    private ThreadFactory threadFactory(final MetricRegistry metricRegistry) {
+        return new InstrumentedThreadFactory(
+                new ThreadFactoryBuilder().setNameFormat("systemjob-executor-%d").build(),
+                metricRegistry);
     }
 
     public String submit(final SystemJob job) throws SystemJobConcurrencyException {
         int concurrent = concurrentJobs(job.getClass());
 
         if (concurrent >= job.maxConcurrency()) {
-            throw new SystemJobConcurrencyException("The maximum of parallel [" + job.getClass().getCanonicalName().toString() + "] is locked " +
+            throw new SystemJobConcurrencyException("The maximum of parallel [" + job.getClass().getCanonicalName() + "] is locked " +
                     "to <" + job.maxConcurrency() + "> but <" + concurrent + "> are running.");
         }
 
@@ -75,7 +79,7 @@ public class SystemJobManager {
             public void run() {
                 job.markStarted();
 
-                Stopwatch x = new Stopwatch().start();
+                Stopwatch x = Stopwatch.createStarted();
 
                 job.execute();  // ... blocks until it finishes.
                 x.stop();
@@ -84,7 +88,7 @@ public class SystemJobManager {
 
                 String msg = "SystemJob <" + job.getId() + "> [" + jobClass + "] finished in " + x.elapsed(TimeUnit.MILLISECONDS) + "ms.";
                 LOG.info(msg);
-                server.getActivityWriter().write(new Activity(msg, SystemJobManager.class));
+                activityWriter.write(new Activity(msg, SystemJobManager.class));
             }
         });
 
@@ -107,5 +111,4 @@ public class SystemJobManager {
 
         return concurrent;
     }
-
 }

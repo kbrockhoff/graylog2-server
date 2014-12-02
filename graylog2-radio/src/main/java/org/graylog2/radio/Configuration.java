@@ -1,6 +1,4 @@
 /**
- * Copyright 2013 Lennart Koopmann <lennart@torch.sh>
- *
  * This file is part of Graylog2.
  *
  * Graylog2 is free software: you can redistribute it and/or modify
@@ -15,85 +13,92 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with Graylog2.  If not, see <http://www.gnu.org/licenses/>.
- *
  */
 package org.graylog2.radio;
 
 import com.github.joschi.jadconfig.Parameter;
 import com.github.joschi.jadconfig.validators.InetPortValidator;
 import com.github.joschi.jadconfig.validators.PositiveIntegerValidator;
-import com.lmax.disruptor.*;
+import org.graylog2.plugin.BaseConfiguration;
 import org.graylog2.plugin.Tools;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import java.net.URI;
 
-/**
- * @author Lennart Koopmann <lennart@torch.sh>
- */
-public class Configuration {
+import static org.graylog2.plugin.Tools.getUriWithPort;
+import static org.graylog2.plugin.Tools.getUriWithScheme;
 
-    private static final Logger LOG = LoggerFactory.getLogger(Configuration.class);
+public class Configuration extends BaseConfiguration {
+    private static final int RADIO_DEFAULT_PORT = 12950;
 
     public enum TRANSPORT_TYPE {
         AMQP, KAFKA
     }
 
-    @Parameter(value = "node_id_file", required = false)
+    @Parameter(value = "node_id_file")
     private String nodeIdFile = "/etc/graylog2-radio-node-id";
 
     @Parameter(value = "transport_type", required = true)
     private String transportType = "amqp";
 
     @Parameter(value = "rest_listen_uri", required = true)
-    private String restListenUri = "http://127.0.0.1:12950/";
+    private URI restListenUri = URI.create("http://127.0.0.1:" + RADIO_DEFAULT_PORT + "/");
 
     @Parameter(value = "graylog2_server_uri", required = true)
-    private String graylog2ServerUri;
+    private URI graylog2ServerUri;
 
-    @Parameter(value = "rest_transport_uri", required = false)
-    private String restTransportUri;
+    @Parameter(value = "rest_transport_uri")
+    private URI restTransportUri;
 
-    @Parameter(value = "kafka_brokers", required = false)
+    @Parameter(value = "kafka_brokers")
     private String kafkaBrokers;
 
-    @Parameter(value = "kafka_required_acks", required = false)
+    @Parameter(value = "kafka_required_acks")
     private int kafkaRequiredAcks = 1;
 
-    @Parameter(value = "kafka_producer_type", required = false)
+    @Parameter(value = "kafka_producer_type")
     private String kafkaProducerType = "async";
 
-    @Parameter(value = "kafka_batch_size", required = false)
+    @Parameter(value = "kafka_batch_size", validator = PositiveIntegerValidator.class)
     private int kafkaBatchSize = 200;
 
-    @Parameter(value = "kafka_batch_max_wait_ms", required = false)
+    @Parameter(value = "kafka_batch_max_wait_ms", validator = PositiveIntegerValidator.class)
     private int kafkaBatchMaxWaitMs = 250;
 
-    @Parameter(value = "amqp_broker_hostname", required = false)
+    @Parameter(value = "amqp_broker_hostname")
     private String amqpHostname = "localhost";
 
-    @Parameter(value = "amqp_broker_port", required = false, validator = InetPortValidator.class)
+    @Parameter(value = "amqp_broker_port", validator = InetPortValidator.class)
     private int amqpPort = 5672;
 
-    @Parameter(value = "amqp_broker_username", required = false)
+    @Parameter(value = "amqp_broker_username")
     private String amqpUsername;
 
-    @Parameter(value = "amqp_broker_password", required = false)
+    @Parameter(value = "amqp_broker_password")
     private String amqpPassword;
 
-    @Parameter(value = "amqp_broker_vhost", required = false)
+    @Parameter(value = "amqp_broker_vhost")
     private String amqpVhost = "/";
+
+    @Parameter(value = "amqp_broker_queue_name")
+    private String amqpQueueName = "graylog2-radio-messages";
+
+    @Parameter(value = "amqp_broker_queue_type")
+    private String amqpQueueType = "topic";
+
+    @Parameter(value = "amqp_broker_exchange_name")
+    private String amqpExchangeName = "graylog2";
+
+    @Parameter(value = "amqp_broker_routing_key")
+    private String amqpRoutingKey = "graylog2-radio-message";
+
+    @Parameter(value = "amqp_broker_parallel_queues")
+    private int amqpParallelQueues = 1;
 
     @Parameter(value = "ring_size", required = true, validator = PositiveIntegerValidator.class)
     private int ringSize = 1024;
 
-    @Parameter(value = "processbuffer_processors", required = true, validator = PositiveIntegerValidator.class)
-    private int processBufferProcessors = 5;
-
-    @Parameter(value = "processor_wait_strategy", required = true)
-    private String processorWaitStrategy = "blocking";
-
+    @Parameter(value = "radio_transport_max_errors")
+    private int radioTransportMaxErrors = 0;
 
     public String getNodeIdFile() {
         return nodeIdFile;
@@ -107,80 +112,13 @@ public class Configuration {
         }
     }
 
+    @Override
     public URI getRestListenUri() {
-        return Tools.getUriStandard(restListenUri);
-    }
-
-    public URI getRestTransportUri() {
-        if (restTransportUri == null || restTransportUri.isEmpty()) {
-            return null;
-        }
-
-        return Tools.getUriStandard(restTransportUri);
-    }
-
-    public URI getDefaultRestTransportUri() {
-        URI transportUri;
-        URI listenUri = getRestListenUri();
-
-        if (listenUri.getHost().equals("0.0.0.0")) {
-            String guessedIf;
-            try {
-                guessedIf = Tools.guessPrimaryNetworkAddress().getHostAddress();
-            } catch (Exception e) {
-                LOG.error("Could not guess primary network address for rest_transport_uri. Please configure it in your graylog2.conf.", e);
-                throw new RuntimeException("No rest_transport_uri.");
-            }
-
-            String transportStr = "http://" + guessedIf + ":" + listenUri.getPort();
-            transportUri = Tools.getUriStandard(transportStr);
-        } else {
-            transportUri = listenUri;
-        }
-
-        return transportUri;
+        return getUriWithPort(getUriWithScheme(restListenUri, getRestUriScheme()), GRAYLOG2_DEFAULT_PORT);
     }
 
     public URI getGraylog2ServerUri() {
-        if (graylog2ServerUri == null || graylog2ServerUri.isEmpty()) {
-            return null;
-        }
-
-        return Tools.getUriStandard(graylog2ServerUri);
-    }
-
-    public void setRestTransportUri(String restTransportUri) {
-        this.restTransportUri = restTransportUri;
-    }
-
-    public int getRingSize() {
-        return ringSize;
-    }
-
-    public WaitStrategy getProcessorWaitStrategy() {
-        if (processorWaitStrategy.equals("sleeping")) {
-            return new SleepingWaitStrategy();
-        }
-
-        if (processorWaitStrategy.equals("yielding")) {
-            return new YieldingWaitStrategy();
-        }
-
-        if (processorWaitStrategy.equals("blocking")) {
-            return new BlockingWaitStrategy();
-        }
-
-        if (processorWaitStrategy.equals("busy_spinning")) {
-            return new BusySpinWaitStrategy();
-        }
-
-        LOG.warn("Invalid setting for [processor_wait_strategy]:"
-                + " Falling back to default: BlockingWaitStrategy.");
-        return new BlockingWaitStrategy();
-    }
-
-    public int getProcessBufferProcessors() {
-        return processBufferProcessors;
+        return graylog2ServerUri == null ? null : Tools.getUriWithPort(graylog2ServerUri, GRAYLOG2_DEFAULT_PORT);
     }
 
     public String getKafkaBrokers() {
@@ -223,4 +161,27 @@ public class Configuration {
         return amqpHostname;
     }
 
+    public String getAmqpQueueName() {
+        return amqpQueueName;
+    }
+
+    public String getAmqpQueueType() {
+        return amqpQueueType;
+    }
+
+    public String getAmqpExchangeName() {
+        return amqpExchangeName;
+    }
+
+    public String getAmqpRoutingKey() {
+        return amqpRoutingKey;
+    }
+
+    public int getAmqpParallelQueues() {
+        return amqpParallelQueues;
+    }
+
+    public int getRadioTransportMaxErrors() {
+        return radioTransportMaxErrors;
+    }
 }

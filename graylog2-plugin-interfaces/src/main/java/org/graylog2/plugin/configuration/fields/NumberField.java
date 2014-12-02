@@ -1,37 +1,32 @@
 /**
- * Copyright (c) 2013 Lennart Koopmann <lennart@socketfeed.com>
+ * The MIT License
+ * Copyright (c) 2012 TORCH GmbH
  *
- * Permission is hereby granted, free of charge, to any person obtaining a copy of
- * this software and associated documentation files (the "Software"), to deal in
- * the Software without restriction, including without limitation the rights to
- * use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies
- * of the Software, and to permit persons to whom the Software is furnished to do
- * so, subject to the following conditions:
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
  *
- * The above copyright notice and this permission notice shall be included in all
- * copies or substantial portions of the Software.
+ * The above copyright notice and this permission notice shall be included in
+ * all copies or substantial portions of the Software.
  *
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
  * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
  * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
  * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
  * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+ * THE SOFTWARE.
  */
 package org.graylog2.plugin.configuration.fields;
 
 import com.google.common.collect.Lists;
-import com.google.common.collect.Maps;
 
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 
-/**
- * @author Lennart Koopmann <lennart@torch.sh>
- */
-public class NumberField implements ConfigurationField {
+public class NumberField extends AbstractConfigurationField {
 
     public static final String FIELD_TYPE = "number";
 
@@ -41,16 +36,12 @@ public class NumberField implements ConfigurationField {
         IS_PORT_NUMBER
     }
 
-    private final String name;
-    private final String humanName;
-    private final int defaultValue;
-    private final String description;
-    private final Optional optional;
+    private int defaultValue;
 
     private final List<String> attributes;
 
     public NumberField(String name, String humanName, int defaultValue, String description, Optional isOptional) {
-        this(name, humanName, defaultValue, description, isOptional, null);
+        this(name, humanName, defaultValue, description, isOptional, new Attribute[0]);
     }
 
     public NumberField(String name, String humanName, int defaultValue, String description, Attribute... attributes) {
@@ -58,11 +49,8 @@ public class NumberField implements ConfigurationField {
     }
 
     public NumberField(String name, String humanName, int defaultValue, String description, Optional isOptional, Attribute... attrs) {
-        this.name = name;
-        this.humanName = humanName;
+        super(FIELD_TYPE, name, humanName, description, isOptional);
         this.defaultValue = defaultValue;
-        this.description = description;
-        this.optional = isOptional;
 
         this.attributes = Lists.newArrayList();
         if (attrs != null) {
@@ -73,43 +61,19 @@ public class NumberField implements ConfigurationField {
     }
 
     @Override
-    public String getFieldType() {
-        return FIELD_TYPE;
-    }
-
-    @Override
-    public String getName() {
-        return name;
-    }
-
-    @Override
-    public String getHumanName() {
-        return humanName;
-    }
-
-    @Override
-    public String getDescription() {
-        return description;
-    }
-
-    @Override
     public Object getDefaultValue() {
         return defaultValue;
     }
 
     @Override
-    public Optional isOptional() {
-        return optional;
+    public void setDefaultValue(Object defaultValue) {
+        if (defaultValue instanceof Integer) {
+            this.defaultValue = (int) defaultValue;
+        }
     }
 
     @Override
     public List<String> getAttributes() {
         return attributes;
     }
-
-    @Override
-    public Map<String, Map<String, String>> getAdditionalInformation() {
-        return Maps.newHashMap();
-    }
-
 }

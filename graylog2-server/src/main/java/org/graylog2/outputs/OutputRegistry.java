@@ -1,6 +1,4 @@
 /**
- * Copyright 2013 Lennart Koopmann <lennart@torch.sh>
- *
  * This file is part of Graylog2.
  *
  * Graylog2 is free software: you can redistribute it and/or modify
@@ -15,57 +13,82 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with Graylog2.  If not, see <http://www.gnu.org/licenses/>.
- *
  */
 package org.graylog2.outputs;
 
-import com.google.common.collect.ImmutableList;
-import com.google.common.collect.Lists;
-import org.graylog2.Core;
+import com.google.common.collect.ImmutableMap;
+import com.google.common.collect.ImmutableSet;
+import org.graylog2.database.NotFoundException;
+import org.graylog2.plugin.configuration.Configuration;
 import org.graylog2.plugin.outputs.MessageOutput;
 import org.graylog2.plugin.outputs.MessageOutputConfigurationException;
+import org.graylog2.plugin.streams.Output;
+import org.graylog2.streams.OutputService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javax.inject.Inject;
+import javax.inject.Singleton;
 import java.util.HashMap;
-import java.util.List;
+import java.util.HashSet;
+import java.util.Map;
+import java.util.Set;
 
 /**
  * @author Lennart Koopmann <lennart@torch.sh>
  */
+@Singleton
 public class OutputRegistry {
-
     private static final Logger LOG = LoggerFactory.getLogger(OutputRegistry.class);
 
-    private final Core core;
-    private List<MessageOutput> outputs;
+    private final Map<String, MessageOutput> runningMessageOutputs;
+    private final MessageOutput defaultMessageOutput;
+    private final OutputService outputService;
+    private final MessageOutputFactory messageOutputFactory;
 
-    public OutputRegistry(Core core) {
-        this.core = core;
-
-        outputs = Lists.newArrayList();
+    @Inject
+    public OutputRegistry(@DefaultMessageOutput MessageOutput defaultMessageOutput,
+                          OutputService outputService,
+                          MessageOutputFactory messageOutputFactory) {
+        this.defaultMessageOutput = defaultMessageOutput;
+        this.outputService = outputService;
+        this.messageOutputFactory = messageOutputFactory;
+        this.runningMessageOutputs = new HashMap<>();
     }
 
-    public void register(MessageOutput output) {
-        this.outputs.add(output);
-    }
-
-    public void initialize() {
-        for(MessageOutput o : outputs) {
+    public MessageOutput getOutputForId(String id) {
+        if (!getRunningMessageOutputs().containsKey(id))
             try {
-                o.initialize(new HashMap<String, String>());
-                LOG.info("Initialized output <{}>.", o.getClass().getCanonicalName());
-            } catch (MessageOutputConfigurationException e) {
-                LOG.error("Could not initialize output <{}>", o.getClass().getCanonicalName(), e);
+                final Output output = outputService.load(id);
+                register(id, launchOutput(output));
+            } catch (NotFoundException | MessageOutputConfigurationException e) {
+                LOG.error("Unable to launch output <{}>: {}", id, e);
+                return null;
             }
-        }
+        return getRunningMessageOutputs().get(id);
     }
 
-    public List<MessageOutput> get() {
-        return new ImmutableList.Builder<MessageOutput>().addAll(outputs).build();
+    protected void register(String id, MessageOutput output) {
+        this.runningMessageOutputs.put(id, output);
     }
 
-    public int count() {
-        return outputs.size();
+    protected MessageOutput launchOutput(Output output) throws MessageOutputConfigurationException {
+        final MessageOutput messageOutput = messageOutputFactory.fromStreamOutput(output);
+        if (messageOutput == null)
+            throw new IllegalArgumentException("Failed to instantiate MessageOutput from Output: " + output);
+
+        messageOutput.initialize(new Configuration(output.getConfiguration()));
+
+        return messageOutput;
+    }
+
+    protected Map<String, MessageOutput> getRunningMessageOutputs() {
+        return ImmutableMap.copyOf(runningMessageOutputs);
+    }
+
+    public Set<MessageOutput> getMessageOutputs() {
+        Set<MessageOutput> runningOutputs = new HashSet<>(this.runningMessageOutputs.values());
+        runningOutputs.add(defaultMessageOutput);
+        return ImmutableSet.copyOf(runningOutputs);
     }
 }

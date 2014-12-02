@@ -1,6 +1,4 @@
 /**
- * Copyright 2013 Lennart Koopmann <lennart@torch.sh>
- *
  * This file is part of Graylog2.
  *
  * Graylog2 is free software: you can redistribute it and/or modify
@@ -15,9 +13,11 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with Graylog2.  If not, see <http://www.gnu.org/licenses/>.
- *
  */
 package org.graylog2.database.validators;
+
+import org.graylog2.plugin.database.validators.ValidationResult;
+import org.graylog2.plugin.database.validators.Validator;
 
 /**
  * @author Lennart Koopmann <lennart@torch.sh>
@@ -28,12 +28,16 @@ public class DateValidator implements Validator {
      * Validates: Object is not null, of type org.joda.time.DateTime and
      * the String representation is in UTC.
      *
+     *
      * @param value The object to check
      * @return validation result
      */
     @Override
-    public boolean validate(Object value) {
-        return value != null && (value instanceof org.joda.time.DateTime) && value.toString().endsWith("Z");
+    public ValidationResult validate(Object value) {
+        if (value != null && (value instanceof org.joda.time.DateTime) && value.toString().endsWith("Z"))
+            return new ValidationResult.ValidationPassed();
+        else
+            return new ValidationResult.ValidationFailed(value + " is not a valid date!");
     }
 
 }

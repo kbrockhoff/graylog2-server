@@ -1,6 +1,4 @@
-/*
- * Copyright 2014 TORCH GmbH
- *
+/**
  * This file is part of Graylog2.
  *
  * Graylog2 is free software: you can redistribute it and/or modify
@@ -41,7 +39,7 @@ import java.util.concurrent.TimeUnit;
 public class TimedBlock implements AutoCloseable {
     private static final Logger ownLogger = LoggerFactory.getLogger(TimedBlock.class);
 
-    private final Stopwatch stopwatch = new Stopwatch();
+    private final Stopwatch stopwatch = Stopwatch.createUnstarted();
     private final Logger log;
     private final String name;
     private final long threshold;

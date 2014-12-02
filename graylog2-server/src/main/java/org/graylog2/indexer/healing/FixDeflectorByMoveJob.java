@@ -1,6 +1,4 @@
 /**
- * Copyright 2013 Lennart Koopmann <lennart@torch.sh>
- *
  * This file is part of Graylog2.
  *
  * Graylog2 is free software: you can redistribute it and/or modify
@@ -15,16 +13,18 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with Graylog2.  If not, see <http://www.gnu.org/licenses/>.
- *
  */
 package org.graylog2.indexer.healing;
 
-import org.graylog2.Core;
-import org.graylog2.ProcessingPauseLockedException;
-import org.graylog2.system.activities.Activity;
+import com.google.inject.assistedinject.AssistedInject;
 import org.graylog2.buffers.Buffers;
 import org.graylog2.indexer.Deflector;
+import org.graylog2.indexer.indices.Indices;
 import org.graylog2.notifications.Notification;
+import org.graylog2.notifications.NotificationService;
+import org.graylog2.plugin.ServerStatus;
+import org.graylog2.shared.system.activities.Activity;
+import org.graylog2.shared.system.activities.ActivityWriter;
 import org.graylog2.system.jobs.SystemJob;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -33,22 +33,43 @@ import org.slf4j.LoggerFactory;
  * @author Lennart Koopmann <lennart@torch.sh>
  */
 public class FixDeflectorByMoveJob extends SystemJob {
+    public interface Factory {
+        FixDeflectorByMoveJob create();
+    }
 
     private static final Logger LOG = LoggerFactory.getLogger(FixDeflectorByMoveJob.class);
 
     public static final int MAX_CONCURRENCY = 1;
+    private final Deflector deflector;
+    private final ServerStatus serverStatus;
+    private final Indices indices;
+    private final ActivityWriter activityWriter;
+    private final Buffers bufferSynchronizer;
+    private final NotificationService notificationService;
 
     private boolean cancelRequested = false;
     private int progress = 0;
 
-    public FixDeflectorByMoveJob(Core core) {
-        this.core = core;
+    @AssistedInject
+    public FixDeflectorByMoveJob(Deflector deflector,
+                                 Indices indices,
+                                 ServerStatus serverStatus,
+                                 ActivityWriter activityWriter,
+                                 Buffers bufferSynchronizer,
+                                 NotificationService notificationService) {
+        super(serverStatus);
+        this.deflector = deflector;
+        this.indices = indices;
+        this.serverStatus = serverStatus;
+        this.activityWriter = activityWriter;
+        this.bufferSynchronizer = bufferSynchronizer;
+        this.notificationService = notificationService;
     }
 
     @Override
     public void execute() {
-        if (core.getDeflector().isUp() || !core.getIndexer().indices().exists(core.getDeflector().getName())) {
-            LOG.error("There is no index <{}>. No need to run this job. Aborting.", core.getDeflector().getName());
+        if (deflector.isUp() || !indices.exists(deflector.getName())) {
+            LOG.error("There is no index <{}>. No need to run this job. Aborting.", deflector.getName());
             return;
         }
 
@@ -57,24 +78,24 @@ public class FixDeflectorByMoveJob extends SystemJob {
         boolean wasProcessing = true;
         try {
             // Pause message processing and lock the pause.
-            wasProcessing = core.isProcessing();
-            core.pauseMessageProcessing(true);
+            wasProcessing = serverStatus.isProcessing();
+            serverStatus.pauseMessageProcessing();
             progress = 5;
 
-            Buffers.waitForEmptyBuffers(core);
+            bufferSynchronizer.waitForEmptyBuffers();
             progress = 10;
 
             // Copy messages to new index.
             String newTarget = null;
             try {
-                newTarget = Deflector.buildIndexName(core.getConfiguration().getElasticSearchIndexPrefix(), core.getDeflector().getNewestTargetNumber());
+                newTarget = deflector.getNewestTargetName();
 
-                LOG.info("Starting to move <{}> to <{}>.", core.getDeflector().getName(), newTarget);
-                core.getIndexer().indices().move(core.getDeflector().getName(), newTarget);
+                LOG.info("Starting to move <{}> to <{}>.", deflector.getName(), newTarget);
+                indices.move(deflector.getName(), newTarget);
             } catch(Exception e) {
                 LOG.error("Moving index failed. Rolling back.", e);
                 if (newTarget != null) {
-                    core.getIndexer().indices().delete(newTarget);
+                    indices.delete(newTarget);
                 }
                 throw new RuntimeException(e);
             }
@@ -84,31 +105,31 @@ public class FixDeflectorByMoveJob extends SystemJob {
             progress = 85;
 
             // Delete deflector index.
-            LOG.info("Deleting <{}> index.", core.getDeflector().getName());
-            core.getIndexer().indices().delete(core.getDeflector().getName());
+            LOG.info("Deleting <{}> index.", deflector.getName());
+            indices.delete(deflector.getName());
             progress = 90;
 
             // Set up deflector.
-            core.getDeflector().setUp();
+            deflector.setUp();
             progress = 95;
         } finally {
             // Start message processing again.
             try {
-                core.unlockProcessingPause();
+                serverStatus.unlockProcessingPause();
 
                 if (wasProcessing) {
-                    core.resumeMessageProcessing();
+                    serverStatus.resumeMessageProcessing();
                 }
-            } catch (ProcessingPauseLockedException e) {
+            } catch (Exception e) {
                 // lol checked exceptions
                 throw new RuntimeException("Could not unlock processing pause.", e);
             }
         }
 
         progress = 90;
-        core.getActivityWriter().write(new Activity("Notification condition [" + Notification.Type.DEFLECTOR_EXISTS_AS_INDEX + "] " +
+        activityWriter.write(new Activity("Notification condition [" + Notification.Type.DEFLECTOR_EXISTS_AS_INDEX + "] " +
                 "has been fixed.", this.getClass()));
-        Notification.fixed(core, Notification.Type.DEFLECTOR_EXISTS_AS_INDEX);
+        notificationService.fixed(Notification.Type.DEFLECTOR_EXISTS_AS_INDEX);
 
         progress = 100;
         LOG.info("Finished.");

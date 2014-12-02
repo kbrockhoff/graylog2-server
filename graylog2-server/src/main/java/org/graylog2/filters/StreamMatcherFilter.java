@@ -1,6 +1,4 @@
 /**
- * Copyright 2012 Lennart Koopmann <lennart@socketfeed.com>
- *
  * This file is part of Graylog2.
  *
  * Graylog2 is free software: you can redistribute it and/or modify
@@ -15,20 +13,19 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with Graylog2.  If not, see <http://www.gnu.org/licenses/>.
- *
  */
-
 package org.graylog2.filters;
 
-import org.graylog2.Core;
-import org.graylog2.plugin.GraylogServer;
 import org.graylog2.plugin.Message;
 import org.graylog2.plugin.filters.MessageFilter;
 import org.graylog2.plugin.streams.Stream;
+import org.graylog2.shared.stats.ThroughputStats;
+import org.graylog2.streams.CachedStreamRouter;
 import org.graylog2.streams.StreamRouter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javax.inject.Inject;
 import java.util.List;
 
 /**
@@ -38,15 +35,22 @@ public class StreamMatcherFilter implements MessageFilter {
 
     private static final Logger LOG = LoggerFactory.getLogger(StreamMatcherFilter.class);
 
-    private static final StreamRouter ROUTER = new StreamRouter();
+    private final StreamRouter streamRouter;
+    private final ThroughputStats throughputStats;
+
+    @Inject
+    public StreamMatcherFilter(CachedStreamRouter streamRouter,
+                               ThroughputStats throughputStats) {
+        this.streamRouter = streamRouter;
+        this.throughputStats = throughputStats;
+    }
 
     @Override
-    public boolean filter(Message msg, GraylogServer server) {
-        Core core = (Core) server;
-        List<Stream> streams = ROUTER.route(core, msg);
+    public boolean filter(Message msg) {
+        List<Stream> streams = streamRouter.route(msg);
 
         for (Stream stream : streams) {
-            core.incrementStreamThroughput(stream.getId());
+            throughputStats.incrementStreamThroughput(stream.getId());
         }
         msg.setStreams(streams);
 
@@ -58,6 +62,12 @@ public class StreamMatcherFilter implements MessageFilter {
     @Override
     public String getName() {
         return "StreamMatcher";
+    }
+
+    @Override
+    public int getPriority() {
+        // of the built-in filters this gets run last
+        return 40;
     }
 
 }

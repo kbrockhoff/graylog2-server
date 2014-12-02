@@ -1,6 +1,4 @@
-/*
- * Copyright 2013 TORCH GmbH
- *
+/**
  * This file is part of Graylog2.
  *
  * Graylog2 is free software: you can redistribute it and/or modify
@@ -19,18 +17,34 @@
 package org.graylog2.periodical;
 
 import org.cliffc.high_scale_lib.Counter;
-import org.graylog2.Core;
+import org.graylog2.plugin.periodical.Periodical;
+import org.graylog2.shared.stats.ThroughputStats;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
+import javax.inject.Inject;
 import java.util.HashMap;
 import java.util.Map;
 
 public class StreamThroughputCounterManagerThread extends Periodical {
+    private static final Logger LOG = LoggerFactory.getLogger(StreamThroughputCounterManagerThread.class);
+    private final ThroughputStats throughputStats;
+
+    @Inject
+    public StreamThroughputCounterManagerThread(ThroughputStats throughputStats) {
+        this.throughputStats = throughputStats;
+    }
 
     @Override
-    public void run() {
+    public void doRun() {
         // cycleStreamThroughput clears the map already.
-        final Map<String,Counter> stringCounterMap = core.cycleStreamThroughput();
-        core.setCurrentStreamThroughput(new HashMap<>(stringCounterMap));
+        final Map<String,Counter> stringCounterMap = throughputStats.cycleStreamThroughput();
+        throughputStats.setCurrentStreamThroughput(new HashMap<>(stringCounterMap));
+    }
+
+    @Override
+    protected Logger getLogger() {
+        return LOG;
     }
 
     @Override

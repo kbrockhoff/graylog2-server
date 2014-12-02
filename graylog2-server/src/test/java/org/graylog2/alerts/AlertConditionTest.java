@@ -1,6 +1,4 @@
-/*
- * Copyright 2014 TORCH GmbH
- *
+/**
  * This file is part of Graylog2.
  *
  * Graylog2 is free software: you can redistribute it and/or modify
@@ -16,19 +14,18 @@
  * You should have received a copy of the GNU General Public License
  * along with Graylog2.  If not, see <http://www.gnu.org/licenses/>.
  */
-
 package org.graylog2.alerts;
 
 import com.google.common.collect.Maps;
-import org.graylog2.Core;
-import org.graylog2.indexer.Indexer;
+import com.google.inject.assistedinject.Assisted;
+import org.graylog2.alerts.types.FieldValueAlertCondition;
+import org.graylog2.alerts.types.MessageCountAlertCondition;
+import org.graylog2.database.MongoConnection;
 import org.graylog2.indexer.searches.Searches;
 import org.graylog2.plugin.Tools;
+import org.graylog2.plugin.alarms.AlertCondition;
 import org.graylog2.plugin.streams.Stream;
 import org.joda.time.DateTime;
-import org.powermock.api.mockito.PowerMockito;
-import org.powermock.core.classloader.annotations.PrepareForTest;
-import org.powermock.modules.testng.PowerMockTestCase;
 import org.testng.annotations.BeforeClass;
 
 import java.util.Map;
@@ -40,12 +37,11 @@ import static org.testng.AssertJUnit.*;
 /**
  * @author Dennis Oelkers <dennis@torch.sh>
  */
-@PrepareForTest(Alert.class)
-public class AlertConditionTest extends PowerMockTestCase {
+public class AlertConditionTest {
     protected Stream stream;
-    protected Core core;
-    protected Indexer indexer;
     protected Searches searches;
+    protected AlertService alertService;
+    protected MongoConnection mongoConnection;
 
     protected final String STREAM_ID = "STREAMMOCKID";
     protected final String STREAM_CREATOR = "MOCKUSER";
@@ -54,12 +50,32 @@ public class AlertConditionTest extends PowerMockTestCase {
     @BeforeClass
     public void setUp() throws Exception {
         stream = mock(Stream.class);
-        core = mock(Core.class);
-        indexer = mock(Indexer.class);
         searches = mock(Searches.class);
+        mongoConnection = mock(MongoConnection.class);
+        // TODO use injection please. this sucks so bad
+        alertService = new AlertServiceImpl(mongoConnection,
+                                            new FieldValueAlertCondition.Factory() {
+                                                @Override
+                                                public FieldValueAlertCondition createAlertCondition(Stream stream,
+                                                                                                     String id,
+                                                                                                     DateTime createdAt,
+                                                                                                     @Assisted("userid") String creatorUserId,
+                                                                                                     Map<String, Object> parameters) {
+                                                    return new FieldValueAlertCondition(searches, stream, id, createdAt, creatorUserId, parameters);
+                                                }
+                                            },
+                                            new MessageCountAlertCondition.Factory() {
+                                                @Override
+                                                public MessageCountAlertCondition createAlertCondition(Stream stream,
+                                                                                                       String id,
+                                                                                                       DateTime createdAt,
+                                                                                                       @Assisted("userid") String creatorUserId,
+                                                                                                       Map<String, Object> parameters) {
+                                                    return new MessageCountAlertCondition(searches, stream, id, createdAt, creatorUserId, parameters);
+                                                }
+                                            });
+
         when(stream.getId()).thenReturn(STREAM_ID);
-        when(indexer.searches()).thenReturn(searches);
-        when(core.getIndexer()).thenReturn(indexer);
     }
 
     protected void assertTriggered(AlertCondition alertCondition, AlertCondition.CheckResult result) {
@@ -68,7 +84,7 @@ public class AlertConditionTest extends PowerMockTestCase {
         assertEquals("AlertCondition of result is not the same we created!", result.getTriggeredCondition(), alertCondition);
         long difference = Tools.iso8601().getMillis() - result.getTriggeredAt().getMillis();
         assertTrue("AlertCondition should be triggered about now", difference < 50);
-        assertFalse("Alert was triggered, so we should not be in grace period!", alertCondition.inGracePeriod());
+        assertFalse("Alert was triggered, so we should not be in grace period!", alertService.inGracePeriod(alertCondition));
     }
 
     protected void assertNotTriggered(AlertCondition.CheckResult result) {
@@ -86,14 +102,15 @@ public class AlertConditionTest extends PowerMockTestCase {
     }
 
     protected void alertLastTriggered(int seconds) {
-        PowerMockito.mockStatic(Alert.class);
-        PowerMockito.when(Alert.triggeredSecondsAgo(STREAM_ID, CONDITION_ID, core)).thenReturn(seconds);
+        //PowerMockito.mockStatic(AlertImpl.class);
+        //PowerMockito.when(alertService.triggeredSecondsAgo(STREAM_ID, CONDITION_ID)).thenReturn(seconds);
+        when(alertService.triggeredSecondsAgo(STREAM_ID, CONDITION_ID)).thenReturn(seconds);
     }
 
-    protected <T extends AlertCondition> T getTestInstance(Class<T> klazz, Map<String, Object> parameters) {
+    protected <T extends AbstractAlertCondition> T getTestInstance(Class<T> klazz, Map<String, Object> parameters) {
         try {
-            return klazz.getConstructor(Core.class, Stream.class, String.class, DateTime.class, String.class, Map.class)
-                    .newInstance(core, stream, CONDITION_ID, Tools.iso8601(), STREAM_CREATOR, parameters);
+            return klazz.getConstructor(Stream.class, String.class, DateTime.class, String.class, Map.class)
+                    .newInstance(stream, CONDITION_ID, Tools.iso8601(), STREAM_CREATOR, parameters);
         } catch (Exception e) {
             throw new RuntimeException(e);
         }

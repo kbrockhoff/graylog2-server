@@ -1,6 +1,4 @@
 /**
- * Copyright 2013 Lennart Koopmann <lennart@socketfeed.com>
- *
  * This file is part of Graylog2.
  *
  * Graylog2 is free software: you can redistribute it and/or modify
@@ -15,17 +13,27 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with Graylog2.  If not, see <http://www.gnu.org/licenses/>.
- *
  */
 package org.graylog2.periodical;
 
 import com.codahale.metrics.Meter;
+import com.codahale.metrics.MetricRegistry;
+import com.google.common.util.concurrent.Uninterruptibles;
+import com.google.inject.Inject;
+import org.graylog2.buffers.OutputBuffer;
 import org.graylog2.inputs.Cache;
+import org.graylog2.inputs.InputCache;
+import org.graylog2.inputs.OutputCache;
 import org.graylog2.plugin.Message;
 import org.graylog2.plugin.buffers.Buffer;
 import org.graylog2.plugin.buffers.BufferOutOfCapacityException;
+import org.graylog2.plugin.periodical.Periodical;
+import org.graylog2.plugin.ServerStatus;
+import org.graylog2.shared.buffers.ProcessBuffer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import java.util.concurrent.TimeUnit;
 
 import static com.codahale.metrics.MetricRegistry.name;
 
@@ -39,46 +47,75 @@ public class MasterCacheWorkerThread extends Periodical {
     private Meter writtenMessages;
     private Meter outOfCapacity;
 
+    private final MetricRegistry metricRegistry;
+    private final InputCache inputCache;
+    private final OutputCache outputCache;
+    private final ProcessBuffer processBuffer;
+    private final OutputBuffer outputBuffer;
+    private final ServerStatus serverStatus;
+
+    @Inject
+    public MasterCacheWorkerThread(MetricRegistry metricRegistry,
+                                   InputCache inputCache,
+                                   OutputCache outputCache,
+                                   ProcessBuffer processBuffer,
+                                   OutputBuffer outputBuffer,
+                                   ServerStatus serverStatus) {
+        this.metricRegistry = metricRegistry;
+        this.inputCache = inputCache;
+        this.outputCache = outputCache;
+        this.processBuffer = processBuffer;
+        this.outputBuffer = outputBuffer;
+        this.serverStatus = serverStatus;
+    }
+
     @Override
-    public void run() {
-        writtenMessages = core.metrics().meter(name(MasterCacheWorkerThread.class, "writtenMessages"));
-        outOfCapacity =  core.metrics().meter(name(MasterCacheWorkerThread.class, "FailedWritesOutOfCapacity"));
+    public void doRun() {
+        writtenMessages = metricRegistry.meter(name(MasterCacheWorkerThread.class, "writtenMessages"));
+        outOfCapacity =  metricRegistry.meter(name(MasterCacheWorkerThread.class, "FailedWritesOutOfCapacity"));
 
         new Thread(new Runnable() {
             @Override
             public void run() {
-                work(core.getInputCache(), core.getProcessBuffer());
+                work(inputCache, processBuffer);
             }
-        }).start();
+        }, "master-cache-worker-input").start();
 
         new Thread(new Runnable() {
             @Override
             public void run() {
-                work(core.getOutputCache(), core.getOutputBuffer());
+                work(outputCache, outputBuffer);
             }
-        }).start();
+        }, "master-cache-worker-output").start();
+    }
+
+    @Override
+    protected Logger getLogger() {
+        return LOG;
     }
 
     private void work(Cache cache, Buffer targetBuffer) {
-        String cacheName = cache.getClass().getCanonicalName();;
+        String cacheName = cache.getClass().getCanonicalName();
 
         while(true) {
             try {
-                if (cache.size() > 0 && core.isProcessing()) {
+                if (!cache.isEmpty() && serverStatus.isProcessing()) {
                     LOG.debug("{} contains {} messages. Trying to process them.", cacheName, cache.size());
 
                     while (true) {
-                        if (cache.size() <= 0) {
+                        if (cache.isEmpty()) {
                             LOG.debug("Read all messages from {}.", cacheName);
                             break;
                         }
 
-                        if (targetBuffer.hasCapacity() && core.isProcessing()) {
+                        if (targetBuffer.hasCapacity() && serverStatus.isProcessing()) {
                             try {
                                 LOG.debug("Reading message from {}.", cacheName);
                                 Message msg = cache.pop();
-                                targetBuffer.insertFailFast(msg, msg.getSourceInput());
-                                writtenMessages.mark();
+                                if (msg != null) {
+                                    targetBuffer.insertFailFast(msg, msg.getSourceInput());
+                                    writtenMessages.mark();
+                                }
                             } catch (BufferOutOfCapacityException ex) {
                                 outOfCapacity.mark();
                                 LOG.debug("Target buffer out of capacity in {}. Breaking.", cacheName);
@@ -88,15 +125,11 @@ public class MasterCacheWorkerThread extends Periodical {
                     }
                 }
             } catch(Exception e) {
-                LOG.error("Error while trying to work on MasterCache <{}>.", cacheName, e);
-                try {
-                    Thread.sleep(1000);
-                } catch(InterruptedException ex) { /* */ }
+                LOG.error("Error while trying to work on MasterCache <" + cacheName + ">.", e);
+                Uninterruptibles.sleepUninterruptibly(1, TimeUnit.SECONDS);
             }
 
-            try {
-                Thread.sleep(100);
-            } catch(InterruptedException ex) { /* */ }
+            Uninterruptibles.sleepUninterruptibly(100, TimeUnit.MILLISECONDS);
         }
     }
 

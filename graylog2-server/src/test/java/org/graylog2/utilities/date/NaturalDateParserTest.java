@@ -1,6 +1,4 @@
 /**
- * Copyright 2013 Lennart Koopmann <lennart@torch.sh>
- *
  * This file is part of Graylog2.
  *
  * Graylog2 is free software: you can redistribute it and/or modify
@@ -15,10 +13,11 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with Graylog2.  If not, see <http://www.gnu.org/licenses/>.
- *
  */
 package org.graylog2.utilities.date;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.testng.annotations.Test;
 
 import static org.testng.AssertJUnit.*;
@@ -27,6 +26,7 @@ import static org.testng.AssertJUnit.*;
  * @author Lennart Koopmann <lennart@torch.sh>
  */
 public class NaturalDateParserTest {
+    private static final Logger LOG = LoggerFactory.getLogger(NaturalDateParserTest.class);
 
     @Test
     public void testParse() throws Exception, NaturalDateParser.DateNotParsableException {
@@ -51,4 +51,17 @@ public class NaturalDateParserTest {
         new NaturalDateParser().parse("");
     }
 
+    @Test(enabled = false)
+    public void testTemporalOrder() throws Exception, NaturalDateParser.DateNotParsableException {
+        NaturalDateParser p = new NaturalDateParser();
+
+        NaturalDateParser.Result result1 = p.parse("last hour");
+        LOG.info("From={}, To={}", result1.getFrom(), result1.getTo());
+        assertTrue(result1.getFrom().compareTo(result1.getTo()) < 0);
+
+        NaturalDateParser.Result result2 = p.parse("last one hour");
+        assertTrue(result2.getFrom().compareTo(result2.getTo()) < 0);
+
+
+    }
 }

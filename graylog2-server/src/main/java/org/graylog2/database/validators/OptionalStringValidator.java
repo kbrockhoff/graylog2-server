@@ -1,6 +1,4 @@
-/*
- * Copyright 2013 TORCH GmbH
- *
+/**
  * This file is part of Graylog2.
  *
  * Graylog2 is free software: you can redistribute it and/or modify
@@ -18,11 +16,13 @@
  */
 package org.graylog2.database.validators;
 
+import org.graylog2.plugin.database.validators.ValidationResult;
+
 public class OptionalStringValidator extends FilledStringValidator {
     @Override
-    public boolean validate(Object value) {
+    public ValidationResult validate(Object value) {
         if (value == null) {
-            return true;
+            return new ValidationResult.ValidationPassed();
         }
         return super.validate(value);
     }

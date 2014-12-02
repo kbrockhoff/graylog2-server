@@ -1,6 +1,4 @@
 /**
- * Copyright 2014 Lennart Koopmann <lennart@torch.sh>
- *
  * This file is part of Graylog2.
  *
  * Graylog2 is free software: you can redistribute it and/or modify
@@ -15,57 +13,16 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with Graylog2.  If not, see <http://www.gnu.org/licenses/>.
- *
  */
 package org.graylog2.indexer;
 
-import com.google.common.collect.Maps;
-import org.bson.types.ObjectId;
-import org.graylog2.Core;
-import org.graylog2.database.Persisted;
-import org.graylog2.database.validators.Validator;
-import org.graylog2.plugin.Tools;
-import org.joda.time.DateTime;
+import org.graylog2.plugin.database.Persisted;
 
-import java.util.HashMap;
 import java.util.Map;
 
 /**
- * @author Lennart Koopmann <lennart@torch.sh>
+ * @author Dennis Oelkers <dennis@torch.sh>
  */
-public class PersistedDeadLetter extends Persisted {
-
-    public static final String COLLECTION = "dead_letters";
-
-    public PersistedDeadLetter(Map<String, Object> fields, Core core) {
-        super(core, fields);
-    }
-
-    protected PersistedDeadLetter(ObjectId id, Map<String, Object> fields, Core core) {
-        super(core, id, fields);
-    }
-
-    public Map<String, Object> asMap() {
-        return new HashMap<String, Object>() {{
-            put("timestamp", Tools.getISO8601String((DateTime) fields.get("timestamp")));
-            put("letter_id", fields.get("letter_id"));
-            put("message", fields.get("message"));
-        }};
-    }
-
-    @Override
-    public String getCollectionName() {
-        return COLLECTION;
-    }
-
-    @Override
-    protected Map<String, Validator> getValidations() {
-        return Maps.newHashMap();
-    }
-
-    @Override
-    protected Map<String, Validator> getEmbeddedValidations(String key) {
-        return Maps.newHashMap();
-    }
-
+public interface PersistedDeadLetter extends Persisted {
+    Map<String, Object> asMap();
 }

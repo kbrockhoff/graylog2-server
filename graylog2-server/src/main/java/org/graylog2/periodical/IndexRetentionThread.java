@@ -1,6 +1,4 @@
 /**
- * Copyright 2012 Lennart Koopmann <lennart@socketfeed.com>
- *
  * This file is part of Graylog2.
  *
  * Graylog2 is free software: you can redistribute it and/or modify
@@ -15,25 +13,31 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with Graylog2.  If not, see <http://www.gnu.org/licenses/>.
- *
  */
-
 package org.graylog2.periodical;
 
+import com.google.inject.Inject;
 import org.elasticsearch.action.admin.indices.stats.IndexStats;
+import org.graylog2.Configuration;
+import org.graylog2.indexer.Deflector;
 import org.graylog2.indexer.IndexHelper;
 import org.graylog2.indexer.NoTargetIndexException;
-import org.graylog2.indexer.ranges.IndexRange;
+import org.graylog2.indexer.cluster.Cluster;
+import org.graylog2.indexer.indices.Indices;
 import org.graylog2.indexer.ranges.RebuildIndexRangesJob;
 import org.graylog2.indexer.retention.RetentionStrategyFactory;
 import org.graylog2.plugin.indexer.retention.RetentionStrategy;
-import org.graylog2.system.activities.Activity;
+import org.graylog2.plugin.periodical.Periodical;
+import org.graylog2.shared.system.activities.Activity;
+import org.graylog2.shared.system.activities.ActivityWriter;
 import org.graylog2.system.jobs.SystemJobConcurrencyException;
+import org.graylog2.system.jobs.SystemJobManager;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.graylog2.Core;
 
 import java.util.Map;
+
+import static java.util.concurrent.TimeUnit.MINUTES;
 
 /**
  * @author Lennart Koopmann <lennart@socketfeed.com>
@@ -42,11 +46,40 @@ public class IndexRetentionThread extends Periodical {
 
     private static final Logger LOG = LoggerFactory.getLogger(IndexRetentionThread.class);
 
+    private final Configuration configuration;
+    private final RebuildIndexRangesJob.Factory rebuildIndexRangesJobFactory;
+    private final Deflector deflector;
+    private final Cluster cluster;
+    private final ActivityWriter activityWriter;
+    private final SystemJobManager systemJobManager;
+    private final Indices indices;
+
+    @Inject
+    public IndexRetentionThread(Configuration configuration,
+                                RebuildIndexRangesJob.Factory rebuildIndexRangesJobFactory,
+                                Deflector deflector,
+                                Indices indices,
+                                Cluster cluster,
+                                ActivityWriter activityWriter,
+                                SystemJobManager systemJobManager) {
+        this.configuration = configuration;
+        this.rebuildIndexRangesJobFactory = rebuildIndexRangesJobFactory;
+        this.deflector = deflector;
+        this.indices = indices;
+        this.cluster = cluster;
+        this.activityWriter = activityWriter;
+        this.systemJobManager = systemJobManager;
+    }
+
     @Override
-    public void run() {
-        Map<String, IndexStats> indices = core.getDeflector().getAllDeflectorIndices();
-        int indexCount = indices.size();
-        int maxIndices = core.getConfiguration().getMaxNumberOfIndices();
+    public void doRun() {
+        if (!cluster.isConnectedAndHealthy()) {
+            LOG.info("Elasticsearch cluster not available, skipping index retention checks.");
+            return;
+        }
+        Map<String, IndexStats> deflectorIndices = deflector.getAllDeflectorIndices();
+        int indexCount = deflectorIndices.size();
+        int maxIndices = configuration.getMaxNumberOfIndices();
 
         // Do we have more indices than the configured maximum?
         if (indexCount <= maxIndices) {
@@ -60,12 +93,12 @@ public class IndexRetentionThread extends Periodical {
         String msg = "Number of indices (" + indexCount + ") higher than limit (" + maxIndices + "). " +
                 "Running retention for " + removeCount + " indices.";
         LOG.info(msg);
-        core.getActivityWriter().write(new Activity(msg, IndexRetentionThread.class));
+        activityWriter.write(new Activity(msg, IndexRetentionThread.class));
 
         try {
             runRetention(
-                    RetentionStrategyFactory.fromString(core, core.getConfiguration().getRetentionStrategy()),
-                    indices,
+                    RetentionStrategyFactory.fromString(configuration.getRetentionStrategy(), indices),
+                    deflectorIndices,
                     removeCount
             );
         } catch (RetentionStrategyFactory.NoSuchStrategyException e) {
@@ -75,10 +108,15 @@ public class IndexRetentionThread extends Periodical {
         }
     }
 
-    public void runRetention(RetentionStrategy strategy, Map<String, IndexStats> indices, int removeCount) throws NoTargetIndexException {
-        for (String indexName : IndexHelper.getOldestIndices(indices.keySet(), removeCount)) {
+    @Override
+    protected Logger getLogger() {
+        return LOG;
+    }
+
+    public void runRetention(RetentionStrategy strategy, Map<String, IndexStats> deflectorIndices, int removeCount) throws NoTargetIndexException {
+        for (String indexName : IndexHelper.getOldestIndices(deflectorIndices.keySet(), removeCount)) {
             // Never run against the current deflector target.
-            if (core.getDeflector().getCurrentActualTargetIndex().equals(indexName)) {
+            if (deflector.getCurrentActualTargetIndex().equals(indexName)) {
                 LOG.info("Not running retention against current deflector target <{}>.", indexName);
                 continue;
             }
@@ -87,7 +125,7 @@ public class IndexRetentionThread extends Periodical {
              * Never run against a re-opened index. Indices are marked as re-opened by storing a setting
              * attribute and we can check for that here.
              */
-            if (core.getIndexer().indices().isReopened(indexName)) {
+            if (indices.isReopened(indexName)) {
                 LOG.info("Not running retention against reopened index <{}>.", indexName);
                 continue;
             }
@@ -95,7 +133,7 @@ public class IndexRetentionThread extends Periodical {
             String msg = "Running retention strategy [" + strategy.getClass().getCanonicalName() + "] " +
                     "for index <" + indexName + ">";
             LOG.info(msg);
-            core.getActivityWriter().write(new Activity(msg, IndexRetentionThread.class));
+            activityWriter.write(new Activity(msg, IndexRetentionThread.class));
 
             // Sorry if this should ever go mad. Run retention strategy!
             strategy.runStrategy(indexName);
@@ -103,10 +141,10 @@ public class IndexRetentionThread extends Periodical {
 
         // Re-calculate index ranges.
         try {
-            core.getSystemJobManager().submit(new RebuildIndexRangesJob(core));
+            systemJobManager.submit(rebuildIndexRangesJobFactory.create(deflector));
         } catch (SystemJobConcurrencyException e) {
             String msg = "Could not re-calculate index ranges after running retention: Maximum concurrency of job is reached.";
-            core.getActivityWriter().write(new Activity(msg, IndexRetentionThread.class));
+            activityWriter.write(new Activity(msg, IndexRetentionThread.class));
             LOG.error(msg);
         }
     }
@@ -128,7 +166,7 @@ public class IndexRetentionThread extends Periodical {
 
     @Override
     public boolean startOnThisNode() {
-        return core.getConfiguration().performRetention();
+        return configuration.performRetention();
     }
 
     @Override
@@ -144,7 +182,7 @@ public class IndexRetentionThread extends Periodical {
     @Override
     public int getPeriodSeconds() {
         // Five minutes.
-        return 300;
+        return (int) MINUTES.toSeconds(5);
     }
 
 }

@@ -1,6 +1,4 @@
 /**
- * Copyright 2013 Lennart Koopmann <lennart@torch.sh>
- *
  * This file is part of Graylog2.
  *
  * Graylog2 is free software: you can redistribute it and/or modify
@@ -15,7 +13,6 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with Graylog2.  If not, see <http://www.gnu.org/licenses/>.
- *
  */
 package org.graylog2.rest.resources.system;
 
@@ -23,18 +20,24 @@ import com.codahale.metrics.annotation.Timed;
 import com.google.common.collect.Maps;
 import org.apache.shiro.authz.annotation.RequiresAuthentication;
 import org.apache.shiro.authz.annotation.RequiresPermissions;
-import org.graylog2.Core;
+import org.graylog2.Configuration;
+import org.graylog2.buffers.OutputBuffer;
+import org.graylog2.inputs.InputCache;
+import org.graylog2.inputs.OutputCache;
 import org.graylog2.plugin.buffers.BufferWatermark;
-import org.graylog2.rest.documentation.annotations.Api;
-import org.graylog2.rest.documentation.annotations.ApiOperation;
+import com.wordnik.swagger.annotations.Api;
+import com.wordnik.swagger.annotations.ApiOperation;
 import org.graylog2.rest.resources.RestResource;
 import org.graylog2.security.RestPermissions;
+import org.graylog2.shared.buffers.ProcessBuffer;
 
+import javax.inject.Inject;
 import javax.ws.rs.GET;
 import javax.ws.rs.Path;
 import javax.ws.rs.Produces;
 import javax.ws.rs.core.MediaType;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * @author Lennart Koopmann <lennart@torch.sh>
@@ -44,25 +47,57 @@ import java.util.Map;
 @Path("/system/buffers")
 public class BufferResource extends RestResource {
 
+    private final InputCache inputCache;
+    private final OutputCache outputCache;
+    private final Configuration configuration;
+    private final ProcessBuffer processBuffer;
+    private final OutputBuffer outputBuffer;
+
+    @Inject
+    public BufferResource(InputCache inputCache,
+                          OutputCache outputCache,
+                          Configuration configuration,
+                          ProcessBuffer processBuffer,
+                          OutputBuffer outputBuffer) {
+        this.inputCache = inputCache;
+        this.outputCache = outputCache;
+        this.configuration = configuration;
+        this.processBuffer = processBuffer;
+        this.outputBuffer = outputBuffer;
+    }
+
     @GET @Timed
     @ApiOperation(value = "Get current utilization of buffers and caches of this node.")
     @RequiresPermissions(RestPermissions.BUFFERS_READ)
     @Produces(MediaType.APPLICATION_JSON)
     public String utilization() {
         Map<String, Object> result = Maps.newHashMap();
-        result.put("buffers", buffers(core));
-        result.put("master_caches", masterCaches(core));
+        result.put("buffers", buffers());
+        result.put("master_caches", masterCaches());
 
         return json(result);
     }
 
-    private Map<String, Object> masterCaches(Core core) {
+    @GET @Timed
+    @Path("/classes")
+    @ApiOperation(value = "Get classnames of current buffer implementations.")
+    @RequiresPermissions(RestPermissions.BUFFERS_READ)
+    @Produces(MediaType.APPLICATION_JSON)
+    public String getBufferClasses() {
+        Map<String, String> result = Maps.newHashMap();
+        result.put("process_buffer", processBuffer.getClass().getCanonicalName());
+        result.put("output_buffer", outputBuffer.getClass().getCanonicalName());
+
+        return json(result);
+    }
+
+    private Map<String, Object> masterCaches() {
         Map<String, Object> caches = Maps.newHashMap();
         Map<String, Object> input = Maps.newHashMap();
         Map<String, Object> output = Maps.newHashMap();
 
-        input.put("size", core.getInputCache().size());
-        output.put("size", core.getOutputCache().size());
+        input.put("size", inputCache.size());
+        output.put("size", outputCache.size());
 
         caches.put("input", input);
         caches.put("output", output);
@@ -70,20 +105,22 @@ public class BufferResource extends RestResource {
         return caches;
     }
 
-    private Map<String, Object> buffers(Core core) {
+    private Map<String, Object> buffers() {
         Map<String, Object> buffers = Maps.newHashMap();
         Map<String, Object> input = Maps.newHashMap();
         Map<String, Object> output = Maps.newHashMap();
 
-        int ringSize = core.getConfiguration().getRingSize();
+        int ringSize = configuration.getRingSize();
 
-        BufferWatermark pWm = new BufferWatermark(ringSize, core.processBufferWatermark());
-        input.put("utilization_percent", pWm.getUtilizationPercentage());
-        input.put("utilization", pWm.getUtilization());
+        final long inputSize = processBuffer.size();
+        final float inputUtil = inputSize/ringSize*100;
+        input.put("utilization_percent", inputUtil);
+        input.put("utilization", inputSize);
 
-        BufferWatermark oWm = new BufferWatermark(ringSize, core.outputBufferWatermark());
-        output.put("utilization_percent", oWm.getUtilizationPercentage());
-        output.put("utilization", oWm.getUtilization());
+        final long outputSize = outputBuffer.size();
+        final float outputUtil = outputSize/ringSize*100;
+        output.put("utilization_percent", outputUtil);
+        output.put("utilization", outputSize);
 
         buffers.put("input", input);
         buffers.put("output", output);

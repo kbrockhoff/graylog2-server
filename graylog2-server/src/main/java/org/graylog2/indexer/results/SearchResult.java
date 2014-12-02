@@ -1,6 +1,4 @@
 /**
- * Copyright 2013 Lennart Koopmann <lennart@socketfeed.com>
- *
  * This file is part of Graylog2.
  *
  * Graylog2 is free software: you can redistribute it and/or modify
@@ -15,21 +13,19 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with Graylog2.  If not, see <http://www.gnu.org/licenses/>.
- *
  */
-
 package org.graylog2.indexer.results;
 
-import com.beust.jcommander.internal.Lists;
-import com.beust.jcommander.internal.Sets;
+import com.google.common.collect.Sets;
 import org.elasticsearch.common.bytes.BytesReference;
 import org.elasticsearch.common.unit.TimeValue;
-import org.elasticsearch.search.SearchHit;
 import org.elasticsearch.search.SearchHits;
+import org.graylog2.indexer.ranges.IndexRange;
 import org.graylog2.plugin.Message;
 
 import java.util.Iterator;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 /**
@@ -40,13 +36,13 @@ public class SearchResult extends IndexQueryResult {
 	private final long totalResults;
 	private final List<ResultMessage> results;
 	private final Set<String> fields;
-    private final Set<String> usedIndices;
+    private final Set<IndexRange> usedIndices;
 
-	public SearchResult(SearchHits searchHits, Set<String> usedIndices, String originalQuery, BytesReference builtQuery, TimeValue took) {
+	public SearchResult(SearchHits searchHits, Set<IndexRange> usedIndices, String originalQuery, BytesReference builtQuery, TimeValue took) {
         super(originalQuery, builtQuery, took);
 
 		this.results = buildResults(searchHits);
-		this.fields = extractFields(searchHits);
+		this.fields = extractFields(results);
 		this.totalResults = searchHits.getTotalHits();
         this.usedIndices = usedIndices;
 	}
@@ -62,29 +58,38 @@ public class SearchResult extends IndexQueryResult {
 	public Set<String> getFields() {
 		return fields;
 	}
-	
-	private Set<String> extractFields(SearchHits hits) {
-		Set<String> fields = Sets.newHashSet();
 
-		Iterator<SearchHit> i = hits.iterator();
-		while(i.hasNext()) {
-			for (String field : i.next().sourceAsMap().keySet()) {
-				if (!Message.RESERVED_FIELDS.contains(field)) {
-					fields.add(field);
-				}
-			}
-		}
-		
-		// Because some fields actually make sense in this result and some don't.
-		fields.add("message");
-		fields.add("source");
-		fields.remove("streams");
-		fields.remove("full_message");
-		
-		return fields;
-	}
+    private Set<String> extractFields(List<ResultMessage> hits) {
+        Set<String> filteredFields = Sets.newHashSet();
+        Set<String> allFields = Sets.newHashSet();
 
-    public Set<String> getUsedIndices() {
+        Iterator<ResultMessage> i = hits.iterator();
+        while(i.hasNext()) {
+            final Map<String, Object> message = i.next().getMessage();
+            allFields.addAll(message.keySet());
+
+            for (String field : message.keySet()) {
+                if (!Message.RESERVED_FIELDS.contains(field)) {
+                    filteredFields.add(field);
+                }
+            }
+        }
+
+        // Because some fields actually make sense in this result and some don't.
+        // TODO: This is super awkward. First we do not include RESERVED_FIELDS, then we add some back...
+        if (allFields.contains("message")) {
+            filteredFields.add("message");
+        }
+        if (allFields.contains("source")) {
+            filteredFields.add("source");
+        }
+        filteredFields.remove("streams");
+        filteredFields.remove("full_message");
+
+        return filteredFields;
+    }
+
+    public Set<IndexRange> getUsedIndices() {
         return usedIndices;
     }
 

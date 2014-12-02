@@ -1,6 +1,4 @@
-/*
- * Copyright 2013 TORCH UG
- *
+/**
  * This file is part of Graylog2.
  *
  * Graylog2 is free software: you can redistribute it and/or modify
@@ -18,6 +16,7 @@
  */
 package org.graylog2.inputs.extractors;
 
+import com.codahale.metrics.MetricRegistry;
 import org.graylog2.plugin.inputs.Converter;
 import org.graylog2.plugin.inputs.Extractor;
 
@@ -25,8 +24,9 @@ import java.util.List;
 import java.util.Map;
 
 public class CopyInputExtractor extends Extractor {
-    public CopyInputExtractor(String id, String title, int order, CursorStrategy cursorStrategy, String sourceField, String targetField, Map<String, Object> extractorConfig, String creatorUserId, List<Converter> converters, ConditionType conditionType, String conditionValue) throws ReservedFieldException {
-        super(id,
+    public CopyInputExtractor(MetricRegistry metricRegistry, String id, String title, int order, CursorStrategy cursorStrategy, String sourceField, String targetField, Map<String, Object> extractorConfig, String creatorUserId, List<Converter> converters, ConditionType conditionType, String conditionValue) throws ReservedFieldException {
+        super(metricRegistry,
+              id,
               title,
               order,
               Type.COPY_INPUT,

@@ -1,6 +1,4 @@
 /**
- * Copyright 2014 Lennart Koopmann <lennart@torch.sh>
- *
  * This file is part of Graylog2.
  *
  * Graylog2 is free software: you can redistribute it and/or modify
@@ -15,37 +13,39 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with Graylog2.  If not, see <http://www.gnu.org/licenses/>.
- *
  */
 package org.graylog2.dashboards.widgets;
 
+import com.codahale.metrics.MetricRegistry;
+import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Maps;
-import org.graylog2.Core;
 import org.graylog2.indexer.IndexHelper;
 import org.graylog2.indexer.results.TermsResult;
+import org.graylog2.indexer.searches.Searches;
 import org.graylog2.indexer.searches.timeranges.TimeRange;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.util.HashMap;
+import javax.annotation.Nullable;
 import java.util.Map;
 
-/**
- * @author Lennart Koopmann <lennart@torch.sh>
- */
+import static com.google.common.base.Strings.isNullOrEmpty;
+
 public class QuickvaluesWidget extends DashboardWidget {
 
     private static final Logger LOG = LoggerFactory.getLogger(QuickvaluesWidget.class);
 
-    private final Core core;
     private final String query;
     private final TimeRange timeRange;
+    @Nullable
     private final String streamId;
 
     private final String field;
+    private final Searches searches;
 
-    public QuickvaluesWidget(Core core, String id, String description, int cacheTime, Map<String, Object> config, String query, TimeRange timeRange, String creatorUserId) throws InvalidWidgetConfigurationException {
-        super(core, Type.QUICKVALUES, id, description, cacheTime, config, creatorUserId);
+    public QuickvaluesWidget(MetricRegistry metricRegistry, Searches searches, String id, String description, int cacheTime, Map<String, Object> config, String query, TimeRange timeRange, String creatorUserId) throws InvalidWidgetConfigurationException {
+        super(metricRegistry, Type.QUICKVALUES, id, description, cacheTime, config, creatorUserId);
+        this.searches = searches;
 
         if (!checkConfig(config)) {
             throw new InvalidWidgetConfigurationException("Missing or invalid widget configuration. Provided config was: " + config.toString());
@@ -53,15 +53,9 @@ public class QuickvaluesWidget extends DashboardWidget {
 
         this.query = query;
         this.timeRange = timeRange;
-        this.core = core;
 
         this.field = (String) config.get("field");
-
-        if (config.containsKey("stream_id")) {
-            this.streamId = (String) config.get("stream_id");
-        } else {
-            this.streamId = null;
-        }
+        this.streamId = (String) config.get("stream_id");
     }
 
     public String getQuery() {
@@ -74,24 +68,27 @@ public class QuickvaluesWidget extends DashboardWidget {
 
     @Override
     public Map<String, Object> getPersistedConfig() {
-        return new HashMap<String, Object>() {{
-            put("query", query);
-            put("timerange", timeRange.getPersistedConfig());
-            put("stream_id", streamId);
+        final ImmutableMap.Builder<String, Object> persistedConfig = ImmutableMap.<String, Object>builder()
+                .put("query", query)
+                .put("timerange", timeRange.getPersistedConfig())
+                .put("field", field);
 
-            put("field", field);
-        }};
+        if (!isNullOrEmpty(streamId)) {
+            persistedConfig.put("stream_id", streamId);
+        }
+
+        return persistedConfig.build();
     }
 
     @Override
     protected ComputationResult compute() {
         String filter = null;
-        if (streamId != null && !streamId.isEmpty()) {
+        if (!isNullOrEmpty(streamId)) {
             filter = "streams:" + streamId;
         }
 
         try {
-            TermsResult terms = core.getIndexer().searches().terms(field, 50, query, filter, timeRange);
+            final TermsResult terms = searches.terms(field, 50, query, filter, timeRange);
 
             Map<String, Object> result = Maps.newHashMap();
             result.put("terms", terms.getTerms());
@@ -110,5 +107,4 @@ public class QuickvaluesWidget extends DashboardWidget {
     private boolean checkConfig(Map<String, Object> config) {
         return config.containsKey("field");
     }
-
 }

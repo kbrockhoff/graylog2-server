@@ -1,6 +1,4 @@
 /**
- * Copyright 2012 Lennart Koopmann <lennart@socketfeed.com>
- *
  * This file is part of Graylog2.
  *
  * Graylog2 is free software: you can redistribute it and/or modify
@@ -15,63 +13,72 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with Graylog2.  If not, see <http://www.gnu.org/licenses/>.
- *
  */
-
 package org.graylog2.outputs;
 
 import com.codahale.metrics.Meter;
+import com.codahale.metrics.MetricRegistry;
 import com.codahale.metrics.Timer;
 import com.google.common.base.Joiner;
 import com.google.common.collect.Lists;
-import com.google.common.collect.Maps;
 import com.google.common.collect.Ordering;
-import org.graylog2.Core;
-import org.graylog2.plugin.GraylogServer;
+import com.google.inject.Inject;
+import org.graylog2.indexer.messages.Messages;
 import org.graylog2.plugin.Message;
+import org.graylog2.plugin.configuration.Configuration;
+import org.graylog2.plugin.configuration.ConfigurationRequest;
 import org.graylog2.plugin.outputs.MessageOutput;
 import org.graylog2.plugin.outputs.MessageOutputConfigurationException;
-import org.graylog2.plugin.outputs.OutputStreamConfiguration;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.Collections;
 import java.util.List;
-import java.util.Map;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static com.codahale.metrics.MetricRegistry.name;
 
-/**
- * @author Lennart Koopmann <lennart@socketfeed.com>
- */
 public class ElasticSearchOutput implements MessageOutput {
+    private static final String NAME = "ElasticSearch Output";
+    private static final Logger LOG = LoggerFactory.getLogger(ElasticSearchOutput.class);
 
     private final Meter writes;
     private final Timer processTime;
+    private final Messages messages;
+    private final AtomicBoolean isRunning = new AtomicBoolean(false);
 
-    private static final String NAME = "ElasticSearch Output";
-    
-    private static final Logger LOG = LoggerFactory.getLogger(ElasticSearchOutput.class);
-
-    public ElasticSearchOutput(Core core) {
+    @Inject
+    public ElasticSearchOutput(MetricRegistry metricRegistry,
+                               Messages messages) {
+        this.messages = messages;
         // Only constructing metrics here. write() get's another Core reference. (because this technically is a plugin)
-        this.writes = core.metrics().meter(name(ElasticSearchOutput.class, "writes"));
-        this.processTime = core.metrics().timer(name(ElasticSearchOutput.class, "processTime"));
+        this.writes = metricRegistry.meter(name(ElasticSearchOutput.class, "writes"));
+        this.processTime = metricRegistry.timer(name(ElasticSearchOutput.class, "processTime"));
+
+        // Should be set in initialize once this becomes a real plugin.
+        isRunning.set(true);
     }
 
     @Override
-    public void write(List<Message> messages, OutputStreamConfiguration streamConfig, GraylogServer server) throws Exception {
-        LOG.debug("Writing <{}> messages.", messages.size());
+    public void write(Message message) throws Exception {
         if (LOG.isTraceEnabled()) {
-            final List<String> sortedIds = Ordering.natural().sortedCopy(Lists.transform(messages,  Message.ID_FUNCTION));
+            LOG.trace("Writing message id to [{}]: <{}>", getName(), message.getId());
+        }
+        write(Collections.singletonList(message));
+    }
+
+    @Override
+    public void write(List<Message> messageList) throws Exception {
+        if (LOG.isTraceEnabled()) {
+            final List<String> sortedIds = Ordering.natural().sortedCopy(Lists.transform(messageList,
+                                                                                         Message.ID_FUNCTION));
             LOG.trace("Writing message ids to [{}]: <{}>", getName(), Joiner.on(", ").join(sortedIds));
         }
-        Core serverImpl = (Core) server;
-        
-        writes.mark();
 
-        Timer.Context tcx = processTime.time();
-        serverImpl.getIndexer().bulkIndex(messages);
-        tcx.stop();
+        writes.mark(messageList.size());
+        try (final Timer.Context ignored = processTime.time()) {
+            messages.bulkIndex(messageList);
+        }
     }
 
     @Override
@@ -80,20 +87,35 @@ public class ElasticSearchOutput implements MessageOutput {
     }
 
     @Override
-    public void initialize(Map<String, String> config) throws MessageOutputConfigurationException {
+    public void initialize(Configuration config) throws MessageOutputConfigurationException {
         // Built in output. This is just for plugin compat. Nothing to initialize.
+        //isRunning.set(true);
     }
 
     @Override
-    public Map<String, String> getRequestedConfiguration() {
-        // Built in output. This is just for plugin compat. No special configuration required.
-        return Maps.newHashMap();
-    }
-    
-    @Override
-    public Map<String, String> getRequestedStreamConfiguration() {
-        // Built in output. This is just for plugin compat. No special configuration required.
-        return Maps.newHashMap();
+    public void stop() {
+        // TODO: Move ES stop code here.
+        //isRunning.set(false);
     }
 
+    @Override
+    public boolean isRunning() {
+        return isRunning.get();
+    }
+
+    @Override
+    public ConfigurationRequest getRequestedConfiguration() {
+        // Built in output. This is just for plugin compat. No special configuration required.
+        return new ConfigurationRequest();
+    }
+
+    @Override
+    public String getHumanName() {
+        return "ElasticSearch Output";
+    }
+
+    @Override
+    public String getLinkToDocs() {
+        return null;
+    }
 }

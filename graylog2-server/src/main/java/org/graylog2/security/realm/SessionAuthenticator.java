@@ -1,6 +1,4 @@
-/*
- * Copyright 2013 TORCH GmbH
- *
+/**
  * This file is part of Graylog2.
  *
  * Graylog2 is free software: you can redistribute it and/or modify
@@ -24,21 +22,25 @@ import org.apache.shiro.realm.AuthenticatingRealm;
 import org.apache.shiro.session.Session;
 import org.apache.shiro.subject.Subject;
 import org.apache.shiro.util.ThreadContext;
-import org.graylog2.Core;
 import org.graylog2.security.SessionIdToken;
 import org.graylog2.users.User;
+import org.graylog2.users.UserService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javax.inject.Inject;
 import javax.ws.rs.core.MultivaluedMap;
 
 public class SessionAuthenticator extends AuthenticatingRealm {
-    private static final Logger log = LoggerFactory.getLogger(SessionAuthenticator.class);
+    private static final Logger LOG = LoggerFactory.getLogger(SessionAuthenticator.class);
 
-    private final Core core;
+    private final UserService userService;
+    private final LdapUserAuthenticator ldapAuthenticator;
 
-    public SessionAuthenticator(Core core) {
-        this.core = core;
+    @Inject
+    public SessionAuthenticator(UserService userService, LdapUserAuthenticator ldapAuthenticator) {
+        this.userService = userService;
+        this.ldapAuthenticator = ldapAuthenticator;
         // this realm either rejects a session, or allows the associated user implicitly
         setAuthenticationTokenClass(SessionIdToken.class);
         setCredentialsMatcher(new AllowAllCredentialsMatcher());
@@ -50,22 +52,22 @@ public class SessionAuthenticator extends AuthenticatingRealm {
         final Subject subject = new Subject.Builder().sessionId(sessionIdToken.getSessionId()).buildSubject();
         final Session session = subject.getSession(false);
         if (session == null) {
-            log.debug("Invalid session {}. Either it has expired or did not exist.", sessionIdToken.getSessionId());
+            LOG.debug("Invalid session {}. Either it has expired or did not exist.", sessionIdToken.getSessionId());
             return null;
         }
 
         final Object username = subject.getPrincipal();
-        final User user = User.load(String.valueOf(username), core);
+        final User user = userService.load(String.valueOf(username));
         if (user == null) {
-            log.debug("No user named {} found for session {}", username, sessionIdToken.getSessionId());
+            LOG.debug("No user named {} found for session {}", username, sessionIdToken.getSessionId());
             return null;
         }
-        if (user.isExternalUser() && !core.getLdapAuthenticator().isEnabled()) {
+        if (user.isExternalUser() && !ldapAuthenticator.isEnabled()) {
             throw new LockedAccountException("LDAP authentication is currently disabled.");
         }
 
-        if (log.isDebugEnabled()) {
-            log.debug("Found session {} for user name {}", session.getId(), username);
+        if (LOG.isDebugEnabled()) {
+            LOG.debug("Found session {} for user name {}", session.getId(), username);
         }
 
         @SuppressWarnings("unchecked")
@@ -75,7 +77,7 @@ public class SessionAuthenticator extends AuthenticatingRealm {
         if (requestHeaders == null || !"true".equalsIgnoreCase(requestHeaders.getFirst("X-Graylog2-No-Session-Extension"))) {
             session.touch();
         } else {
-            log.debug("Not extending session because the request indicated not to.");
+            LOG.debug("Not extending session because the request indicated not to.");
         }
         ThreadContext.bind(subject);
 

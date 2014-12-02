@@ -1,6 +1,4 @@
 /**
- * Copyright 2013 Lennart Koopmann <lennart@torch.sh>
- *
  * This file is part of Graylog2.
  *
  * Graylog2 is free software: you can redistribute it and/or modify
@@ -15,14 +13,10 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with Graylog2.  If not, see <http://www.gnu.org/licenses/>.
- *
  */
 package org.graylog2.rest.resources.system;
 
-import com.codahale.metrics.Histogram;
-import com.codahale.metrics.Meter;
-import com.codahale.metrics.Metric;
-import com.codahale.metrics.Timer;
+import com.codahale.metrics.*;
 import com.codahale.metrics.annotation.Timed;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Maps;
@@ -31,13 +25,16 @@ import com.mongodb.DBCursor;
 import com.mongodb.DBObject;
 import org.apache.shiro.authz.annotation.RequiresAuthentication;
 import org.apache.shiro.authz.annotation.RequiresPermissions;
-import org.graylog2.rest.documentation.annotations.*;
+import org.graylog2.database.MongoConnection;
+import org.graylog2.metrics.MetricUtils;
+import com.wordnik.swagger.annotations.*;
 import org.graylog2.rest.resources.RestResource;
 import org.graylog2.rest.resources.system.requests.MetricsReadRequest;
 import org.graylog2.security.RestPermissions;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javax.inject.Inject;
 import javax.ws.rs.*;
 import javax.ws.rs.core.MediaType;
 import java.util.ArrayList;
@@ -54,6 +51,15 @@ import java.util.Map;
 public class MetricsResource extends RestResource {
 
     private static final Logger LOG = LoggerFactory.getLogger(MetricsResource.class);
+    private final MetricRegistry metricRegistry;
+    private final MongoConnection mongoConnection;
+
+    @Inject
+    public MetricsResource(MetricRegistry metricRegistry,
+                           MongoConnection mongoConnection) {
+        this.metricRegistry = metricRegistry;
+        this.mongoConnection = mongoConnection;
+    }
 
     @GET @Timed
     @RequiresPermissions(RestPermissions.METRICS_READALL)
@@ -63,7 +69,7 @@ public class MetricsResource extends RestResource {
     public String metrics() {
         Map<String, Object> result = Maps.newHashMap();
 
-        result.put("metrics", core.metrics().getMetrics());
+        result.put("metrics", metricRegistry.getMetrics());
 
         return json(result);
     }
@@ -75,7 +81,7 @@ public class MetricsResource extends RestResource {
     @Produces(MediaType.APPLICATION_JSON)
     public String metricNames() {
         Map<String, Object> result = Maps.newHashMap();
-        result.put("names", core.metrics().getNames());
+        result.put("names", metricRegistry.getNames());
 
         return json(result);
     }
@@ -87,9 +93,9 @@ public class MetricsResource extends RestResource {
             @ApiResponse(code = 404, message = "No such metric")
     })
     @Produces(MediaType.APPLICATION_JSON)
-    public String singleMetric(@ApiParam(title = "metricName", required = true) @PathParam("metricName") String metricName) {
+    public String singleMetric(@ApiParam(name = "metricName", required = true) @PathParam("metricName") String metricName) {
         checkPermission(RestPermissions.METRICS_READ, metricName);
-        Metric metric = core.metrics().getMetrics().get(metricName);
+        Metric metric = metricRegistry.getMetrics().get(metricName);
 
         if (metric == null) {
             LOG.debug("I do not have a metric called [{}], returning 404.", metricName);
@@ -105,8 +111,8 @@ public class MetricsResource extends RestResource {
     @ApiResponses(value = {
             @ApiResponse(code = 400, message = "Malformed body")
     })
-    public String multipleMetrics(@ApiParam(title = "Requested metrics", required = true) MetricsReadRequest request) {
-        final Map<String, Metric> metrics = core.metrics().getMetrics();
+    public String multipleMetrics(@ApiParam(name = "Requested metrics", required = true) MetricsReadRequest request) {
+        final Map<String, Metric> metrics = metricRegistry.getMetrics();
 
         List<Map<String, Object>> metricsList = Lists.newArrayList();
         if (request.metrics == null) {
@@ -120,7 +126,7 @@ public class MetricsResource extends RestResource {
 
             final Metric metric = metrics.get(name);
             if (metric != null) {
-                metricsList.add(getMetricMap(name, metric));
+                metricsList.add(MetricUtils.map(name, metric));
             }
         }
 
@@ -137,15 +143,15 @@ public class MetricsResource extends RestResource {
             @ApiResponse(code = 404, message = "No such metric namespace")
     })
     @Produces(MediaType.APPLICATION_JSON)
-    public String byNamespace(@ApiParam(title = "namespace", required = true) @PathParam("namespace") String namespace) {
+    public String byNamespace(@ApiParam(name = "namespace", required = true) @PathParam("namespace") String namespace) {
         List<Map<String, Object>> metrics = Lists.newArrayList();
 
-        for(Map.Entry<String, Metric> e : core.metrics().getMetrics().entrySet()) {
+        for(Map.Entry<String, Metric> e : metricRegistry.getMetrics().entrySet()) {
             final String metricName = e.getKey();
             if (metricName.startsWith(namespace) && isPermitted(RestPermissions.METRICS_READ, metricName)) {
                 try {
                     final Metric metric = e.getValue();
-                    Map<String, Object> metricMap = getMetricMap(metricName, metric);
+                    Map<String, Object> metricMap = MetricUtils.map(metricName, metric);
 
                     metrics.add(metricMap);
                 } catch(Exception ex) {
@@ -167,30 +173,6 @@ public class MetricsResource extends RestResource {
         return json(result);
     }
 
-    private Map<String, Object> getMetricMap(String metricName, Metric metric) {
-        String type = metric.getClass().getSimpleName().toLowerCase();
-
-        if (type.isEmpty()) {
-            type = "gauge";
-        }
-
-        Map<String, Object> metricMap = Maps.newHashMap();
-        metricMap.put("full_name", metricName);
-        metricMap.put("name", metricName.substring(metricName.lastIndexOf(".") + 1));
-        metricMap.put("type", type);
-
-        if (metric instanceof Timer) {
-            metricMap.put("metric", buildTimerMap((Timer) metric));
-        } else if(metric instanceof Meter) {
-            metricMap.put("metric", buildMeterMap((Meter) metric));
-        } else if(metric instanceof Histogram) {
-            metricMap.put("metric", buildHistogramMap((Histogram) metric));
-        } else {
-            metricMap.put("metric", metric);
-        }
-        return metricMap;
-    }
-
     enum MetricType {
         GAUGE,
         COUNTER,
@@ -204,8 +186,8 @@ public class MetricsResource extends RestResource {
     @Path("/{metricName}/history")
     @ApiOperation(value = "Get history of a single metric", notes = "The maximum retention time is currently only 5 minutes.")
     public String historicSingleMetric(
-            @ApiParam(title = "metricName", required = true) @PathParam("metricName") String metricName,
-            @ApiParam(title = "after", description = "Only values for after this UTC timestamp (1970 epoch)") @QueryParam("after") @DefaultValue("-1") long after
+            @ApiParam(name = "metricName", required = true) @PathParam("metricName") String metricName,
+            @ApiParam(name = "after", value = "Only values for after this UTC timestamp (1970 epoch)") @QueryParam("after") @DefaultValue("-1") long after
     ) {
         checkPermission(RestPermissions.METRICS_READHISTORY, metricName);
         BasicDBObject andQuery = new BasicDBObject();
@@ -216,7 +198,7 @@ public class MetricsResource extends RestResource {
         }
         andQuery.put("$and", obj);
 
-        final DBCursor cursor = core.getMongoConnection().getDatabase().getCollection("graylog2_metrics")
+        final DBCursor cursor = mongoConnection.getDatabase().getCollection("graylog2_metrics")
                 .find(andQuery).sort(new BasicDBObject("timestamp", 1));
         Map<String, Object> metricsData = Maps.newHashMap();
         metricsData.put("name", metricName);

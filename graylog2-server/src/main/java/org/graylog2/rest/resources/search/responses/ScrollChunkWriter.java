@@ -1,6 +1,4 @@
-/*
- * Copyright 2014 TORCH GmbH
- *
+/**
  * This file is part of Graylog2.
  *
  * Graylog2 is free software: you can redistribute it and/or modify
@@ -35,12 +33,13 @@ import java.io.OutputStream;
 import java.io.OutputStreamWriter;
 import java.lang.annotation.Annotation;
 import java.lang.reflect.Type;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 
 @Provider
 @Produces("text/csv")
 public class ScrollChunkWriter implements MessageBodyWriter<ScrollResult.ScrollChunk> {
-    private static final Logger log = LoggerFactory.getLogger(ScrollChunkWriter.class);
+    private static final Logger LOG = LoggerFactory.getLogger(ScrollChunkWriter.class);
 
     public static final MediaType TEXT_CSV = new MediaType("text", "csv");
 
@@ -67,10 +66,10 @@ public class ScrollChunkWriter implements MessageBodyWriter<ScrollResult.ScrollC
                         MediaType mediaType,
                         MultivaluedMap<String, Object> httpHeaders,
                         OutputStream entityStream) throws IOException, WebApplicationException {
-        if (log.isDebugEnabled()) {
-            log.debug("[{}] Writing chunk {}", Thread.currentThread().getId(), scrollChunk.getChunkNumber());
+        if (LOG.isDebugEnabled()) {
+            LOG.debug("[{}] Writing chunk {}", Thread.currentThread().getId(), scrollChunk.getChunkNumber());
         }
-        final CSVWriter csvWriter = new CSVWriter(new OutputStreamWriter(entityStream));
+        final CSVWriter csvWriter = new CSVWriter(new OutputStreamWriter(entityStream, StandardCharsets.UTF_8));
 
         final List<String> fields = scrollChunk.getFields();
         final int numberOfFields = fields.size();
@@ -85,7 +84,7 @@ public class ScrollChunkWriter implements MessageBodyWriter<ScrollResult.ScrollC
             int idx = 0;
             // first collect all values from the current message
             for (String fieldName : fields) {
-                final Object val = message.message.get(fieldName);
+                final Object val = message.getMessage().get(fieldName);
                 if (val == null) {
                     fieldValues[idx] = null;
                 } else {
@@ -101,7 +100,7 @@ public class ScrollChunkWriter implements MessageBodyWriter<ScrollResult.ScrollC
             csvWriter.writeNext(fieldValues);
         }
         if (csvWriter.checkError()) {
-            log.error("Encountered unspecified error when writing message result as CSV, result is likely malformed.");
+            LOG.error("Encountered unspecified error when writing message result as CSV, result is likely malformed.");
         }
         csvWriter.close();
     }

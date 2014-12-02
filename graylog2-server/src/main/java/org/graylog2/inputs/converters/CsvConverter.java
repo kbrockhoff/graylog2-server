@@ -1,6 +1,4 @@
-/*
- * Copyright 2013 TORCH UG
- *
+/**
  * This file is part of Graylog2.
  *
  * Graylog2 is free software: you can redistribute it and/or modify
@@ -19,7 +17,6 @@
 package org.graylog2.inputs.converters;
 
 import au.com.bytecode.opencsv.CSVParser;
-import com.google.common.base.Objects;
 import com.google.common.collect.Maps;
 import org.graylog2.ConfigurationException;
 import org.graylog2.plugin.inputs.Converter;
@@ -29,8 +26,10 @@ import org.slf4j.LoggerFactory;
 import java.io.IOException;
 import java.util.Map;
 
+import static com.google.common.base.MoreObjects.firstNonNull;
+
 public class CsvConverter extends Converter {
-    private static final Logger log = LoggerFactory.getLogger(CsvConverter.class);
+    private static final Logger LOG = LoggerFactory.getLogger(CsvConverter.class);
 
     private final String[] fieldNames;
 
@@ -50,8 +49,8 @@ public class CsvConverter extends Converter {
             separator = firstCharOrDefault(config.get("separator"), CSVParser.DEFAULT_SEPARATOR);
             quoteChar = firstCharOrDefault(config.get("quote_char"), CSVParser.DEFAULT_QUOTE_CHARACTER);
             escapeChar = firstCharOrDefault(config.get("escape_char"), CSVParser.DEFAULT_ESCAPE_CHARACTER);
-            strictQuotes = Objects.firstNonNull((Boolean) config.get("strict_quotes"), false);
-            trimLeadingWhiteSpace = Objects.firstNonNull((Boolean) config.get("trim_leading_whitespace"), true);
+            strictQuotes = firstNonNull((Boolean) config.get("strict_quotes"), false);
+            trimLeadingWhiteSpace = firstNonNull((Boolean) config.get("trim_leading_whitespace"), true);
 
             final CSVParser parser = getCsvParser();
             fieldNames = parser.parseLine(columnHeader);
@@ -73,7 +72,7 @@ public class CsvConverter extends Converter {
         try {
             final String[] strings = parser.parseLine(value);
             if (strings.length != fieldNames.length) {
-                log.error("Different number of columns in CSV data ({}) and configured field names ({}). Discarding input.",
+                LOG.error("Different number of columns in CSV data ({}) and configured field names ({}). Discarding input.",
                           strings.length, fieldNames.length);
                 return null;
             }
@@ -81,7 +80,7 @@ public class CsvConverter extends Converter {
                 fields.put(fieldNames[i], strings[i]);
             }
         } catch (IOException e) {
-            log.error("Invalid CSV input, discarding input", e);
+            LOG.error("Invalid CSV input, discarding input", e);
             return null;
         }
         return fields;

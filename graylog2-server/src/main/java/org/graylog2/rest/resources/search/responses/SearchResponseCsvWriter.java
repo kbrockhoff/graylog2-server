@@ -1,6 +1,4 @@
-/*
- * Copyright 2013 TORCH GmbH
- *
+/**
  * This file is part of Graylog2.
  *
  * Graylog2 is free software: you can redistribute it and/or modify
@@ -37,6 +35,7 @@ import java.io.OutputStream;
 import java.io.OutputStreamWriter;
 import java.lang.annotation.Annotation;
 import java.lang.reflect.Type;
+import java.nio.charset.StandardCharsets;
 
 @Provider
 @Produces("text/csv")
@@ -44,7 +43,7 @@ public class SearchResponseCsvWriter implements MessageBodyWriter<SearchResponse
 
     public static final MediaType TEXT_CSV = new MediaType("text", "csv");
 
-    private static final Logger log = LoggerFactory.getLogger(SearchResponseCsvWriter.class);
+    private static final Logger LOG = LoggerFactory.getLogger(SearchResponseCsvWriter.class);
 
     @Override
     public boolean isWriteable(Class<?> type, Type genericType, Annotation[] annotations, MediaType mediaType) {
@@ -60,7 +59,7 @@ public class SearchResponseCsvWriter implements MessageBodyWriter<SearchResponse
     public void writeTo(SearchResponse searchResponse, Class<?> type, Type genericType, Annotation[] annotations,
             MediaType mediaType, MultivaluedMap<String, Object> httpHeaders, OutputStream entityStream)
             throws IOException, WebApplicationException {
-        final CSVWriter csvWriter = new CSVWriter(new OutputStreamWriter(entityStream));
+        final CSVWriter csvWriter = new CSVWriter(new OutputStreamWriter(entityStream, StandardCharsets.UTF_8));
         final ImmutableSortedSet<String> sortedFields = ImmutableSortedSet.copyOf(
                 Iterables.concat(searchResponse.fields, Lists.newArrayList("source", "timestamp")));
 
@@ -73,7 +72,7 @@ public class SearchResponseCsvWriter implements MessageBodyWriter<SearchResponse
             int idx = 0;
             // first collect all values from the current message
             for (String fieldName : sortedFields) {
-                final Object val = message.message.get(fieldName);
+                final Object val = message.getMessage().get(fieldName);
                 fieldValues[idx++] = ((val == null) ? null : val.toString().replaceAll("\n", "\\\\n"));
                 fieldValues[idx++] = ((val == null) ? null : val.toString().replaceAll("\r", "\\\\r"));
             }
@@ -81,7 +80,7 @@ public class SearchResponseCsvWriter implements MessageBodyWriter<SearchResponse
             csvWriter.writeNext(fieldValues);
         }
         if (csvWriter.checkError()) {
-            log.error("Encountered unspecified error when writing message result as CSV, result is likely malformed.");
+            LOG.error("Encountered unspecified error when writing message result as CSV, result is likely malformed.");
         }
         csvWriter.close();
     }

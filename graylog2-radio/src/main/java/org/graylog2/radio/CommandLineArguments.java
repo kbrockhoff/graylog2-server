@@ -1,6 +1,4 @@
 /**
- * Copyright 2013 Lennart Koopmann <lennart@torch.sh>
- *
  * This file is part of Graylog2.
  *
  * Graylog2 is free software: you can redistribute it and/or modify
@@ -15,7 +13,6 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with Graylog2.  If not, see <http://www.gnu.org/licenses/>.
- *
  */
 package org.graylog2.radio;
 
@@ -48,6 +45,12 @@ public class CommandLineArguments {
 
     @Parameter(names = {"-h", "--help"}, description = "Show usage information and exit")
     private boolean showHelp = false;
+
+    @Parameter(names = "--dump-config", description = "Show the effective graylog2-radio configuration and exit")
+    private boolean dumpConfig = false;
+
+    @Parameter(names = "--dump-default-config", description = "Show the default configuration and exit")
+    private boolean dumpDefaultConfig = false;
 
     public String getConfigFile() {
         return configFile;
@@ -89,4 +92,19 @@ public class CommandLineArguments {
         return showHelp;
     }
 
+    public boolean isDumpConfig() {
+        return dumpConfig;
+    }
+
+    public void setDumpConfig(boolean dumpConfig) {
+        this.dumpConfig = dumpConfig;
+    }
+
+    public boolean isDumpDefaultConfig() {
+        return dumpDefaultConfig;
+    }
+
+    public void setDumpDefaultConfig(boolean dumpDefaultConfig) {
+        this.dumpDefaultConfig = dumpDefaultConfig;
+    }
 }

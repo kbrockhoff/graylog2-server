@@ -1,6 +1,4 @@
-/*
- * Copyright 2013 TORCH GmbH
- *
+/**
  * This file is part of Graylog2.
  *
  * Graylog2 is free software: you can redistribute it and/or modify
@@ -28,16 +26,19 @@ import org.apache.shiro.mgt.DefaultSecurityManager;
 import org.apache.shiro.session.UnknownSessionException;
 import org.apache.shiro.subject.Subject;
 import org.apache.shiro.util.ThreadContext;
-import org.graylog2.rest.documentation.annotations.Api;
-import org.graylog2.rest.documentation.annotations.ApiOperation;
-import org.graylog2.rest.documentation.annotations.ApiParam;
+import com.wordnik.swagger.annotations.Api;
+import com.wordnik.swagger.annotations.ApiOperation;
+import com.wordnik.swagger.annotations.ApiParam;
 import org.graylog2.rest.resources.RestResource;
 import org.graylog2.security.ShiroSecurityContext;
 import org.graylog2.users.User;
+import org.graylog2.users.UserService;
 import org.joda.time.DateTime;
+import org.joda.time.DateTimeZone;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javax.inject.Inject;
 import javax.ws.rs.*;
 import javax.ws.rs.container.ContainerRequestContext;
 import javax.ws.rs.core.Context;
@@ -52,12 +53,22 @@ import static javax.ws.rs.core.Response.noContent;
 @Path("/system/sessions")
 @Api(value = "System/Sessions", description = "Login for interactive user sessions")
 public class SessionsResource extends RestResource {
-    private static final Logger log = LoggerFactory.getLogger(SessionsResource.class);
+    private static final Logger LOG = LoggerFactory.getLogger(SessionsResource.class);
+
+    private final UserService userService;
+    private final DefaultSecurityManager securityManager;
+
+    @Inject
+    public SessionsResource(UserService userService,
+                            DefaultSecurityManager securityManager) {
+        this.userService = userService;
+        this.securityManager = securityManager;
+    }
 
     @POST
     @ApiOperation(value = "Create a new session", notes = "This request creates a new session for a user or reactivates an existing session: the equivalent of logging in.")
     public Session newSession(@Context ContainerRequestContext requestContext,
-            @ApiParam(title = "Login request", description = "Username and credentials", required = true) SessionCreateRequest createRequest) {
+            @ApiParam(name = "Login request", value = "Username and credentials", required = true) SessionCreateRequest createRequest) {
         final Session result = new Session();
         final SecurityContext securityContext = requestContext.getSecurityContext();
         if (!(securityContext instanceof ShiroSecurityContext)) {
@@ -76,7 +87,7 @@ public class SessionsResource extends RestResource {
 
         try {
             subject.login(new UsernamePasswordToken(createRequest.username, createRequest.password));
-            final User user = User.load(createRequest.username, core);
+            final User user = userService.load(createRequest.username);
             if (user != null) {
                 long timeoutInMillis = user.getSessionTimeoutMs();
                 subject.getSession().setTimeout(timeoutInMillis);
@@ -90,7 +101,7 @@ public class SessionsResource extends RestResource {
             ((DefaultSecurityManager) SecurityUtils.getSecurityManager()).getSubjectDAO().save(subject);
 
         } catch (AuthenticationException e) {
-            log.warn("Unable to log in user " + createRequest.username, e);
+            LOG.warn("Unable to log in user " + createRequest.username, e);
         } catch (UnknownSessionException e) {
             subject.logout();
         }
@@ -99,19 +110,19 @@ public class SessionsResource extends RestResource {
             id = session.getId();
             result.sessionId = id.toString();
             // TODO is this even used by anyone yet?
-            result.validUntil = new DateTime(session.getLastAccessTime()).plus(session.getTimeout()).toDate();
+            result.validUntil = new DateTime(session.getLastAccessTime(), DateTimeZone.UTC).plus(session.getTimeout()).toDate();
             return result;
         }
-        throw new NotAuthorizedException("Invalid username or password", "Graylog2 Server session");
+        throw new NotAuthorizedException("Invalid username or password", "Basic realm=\"Graylog2 Server session\"");
     }
 
     @DELETE
     @ApiOperation(value = "Terminate an existing session", notes = "Destroys the session with the given ID: the equivalent of logging out.")
     @Path("/{sessionId}")
     @RequiresAuthentication
-    public Response terminateSession(@ApiParam(title = "sessionId", required = true) @PathParam("sessionId") String sessionId) {
+    public Response terminateSession(@ApiParam(name = "sessionId", required = true) @PathParam("sessionId") String sessionId) {
         final Subject subject = getSubject();
-        core.getSecurityManager().logout(subject);
+        securityManager.logout(subject);
 
         final org.apache.shiro.session.Session session = subject.getSession(false);
         if (session == null || !session.getId().equals(sessionId)) {
@@ -135,7 +146,7 @@ public class SessionsResource extends RestResource {
     }
 
     @JsonAutoDetect
-    public class Session {
+    public static class Session {
         @JsonProperty(required = true)
         public Date validUntil;
 

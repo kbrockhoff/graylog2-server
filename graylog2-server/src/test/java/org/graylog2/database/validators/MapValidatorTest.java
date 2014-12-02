@@ -1,6 +1,4 @@
 /**
- * Copyright 2013 Lennart Koopmann <lennart@torch.sh>
- *
  * This file is part of Graylog2.
  *
  * Graylog2 is free software: you can redistribute it and/or modify
@@ -15,10 +13,10 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with Graylog2.  If not, see <http://www.gnu.org/licenses/>.
- *
  */
 package org.graylog2.database.validators;
 
+import org.graylog2.plugin.database.validators.Validator;
 import org.testng.annotations.Test;
 
 import java.util.HashMap;
@@ -26,7 +24,8 @@ import java.util.LinkedList;
 import java.util.Map;
 import java.util.TreeMap;
 
-import static org.testng.AssertJUnit.*;
+import static org.testng.AssertJUnit.assertFalse;
+import static org.testng.AssertJUnit.assertTrue;
 
 /**
  * @author Lennart Koopmann <lennart@torch.sh>
@@ -37,17 +36,17 @@ public class MapValidatorTest {
     public void testValidate() throws Exception {
         Validator v = new MapValidator();
 
-        assertFalse(v.validate(null));
-        assertFalse(v.validate(new LinkedList<Integer>()));
-        assertFalse(v.validate(9001));
-        assertFalse(v.validate("foo"));
+        assertFalse(v.validate(null).passed());
+        assertFalse(v.validate(new LinkedList<Integer>()).passed());
+        assertFalse(v.validate(9001).passed());
+        assertFalse(v.validate("foo").passed());
 
         Map<String, String> actuallyFilledMap = new TreeMap<String, String>();
         actuallyFilledMap.put("foo", "bar");
         actuallyFilledMap.put("lol", "wut");
 
-        assertTrue(v.validate(actuallyFilledMap));
-        assertTrue(v.validate(new HashMap<String, String>()));
+        assertTrue(v.validate(actuallyFilledMap).passed());
+        assertTrue(v.validate(new HashMap<String, String>()).passed());
     }
 
 }

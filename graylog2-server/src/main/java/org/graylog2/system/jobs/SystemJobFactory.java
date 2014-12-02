@@ -1,6 +1,4 @@
 /**
- * Copyright 2013 Lennart Koopmann <lennart@torch.sh>
- *
  * This file is part of Graylog2.
  *
  * Graylog2 is free software: you can redistribute it and/or modify
@@ -15,25 +13,34 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with Graylog2.  If not, see <http://www.gnu.org/licenses/>.
- *
  */
 package org.graylog2.system.jobs;
 
-import org.graylog2.Core;
 import org.graylog2.indexer.healing.FixDeflectorByDeleteJob;
 import org.graylog2.indexer.healing.FixDeflectorByMoveJob;
+
+import javax.inject.Inject;
 
 /**
  * @author Lennart Koopmann <lennart@torch.sh>
  */
 public class SystemJobFactory {
+    private final FixDeflectorByMoveJob.Factory fixDeflectorByMoveJobFactory;
+    private final FixDeflectorByDeleteJob.Factory fixDeflectorByDeleteJobFactory;
 
-    public static SystemJob build(String jobName, Core core) throws NoSuchJobException {
+    @Inject
+    public SystemJobFactory(FixDeflectorByMoveJob.Factory fixDeflectorByMoveJobFactory,
+                            FixDeflectorByDeleteJob.Factory fixDeflectorByDeleteJobFactory) {
+        this.fixDeflectorByMoveJobFactory = fixDeflectorByMoveJobFactory;
+        this.fixDeflectorByDeleteJobFactory = fixDeflectorByDeleteJobFactory;
+    }
+
+    public SystemJob build(String jobName) throws NoSuchJobException {
         switch(SystemJob.Type.valueOf(jobName.toUpperCase())) {
             case FIX_DEFLECTOR_DELETE_INDEX:
-                return new FixDeflectorByDeleteJob(core);
+                return fixDeflectorByDeleteJobFactory.create();
             case FIX_DEFLECTOR_MOVE_INDEX:
-                return new FixDeflectorByMoveJob(core);
+                return fixDeflectorByMoveJobFactory.create();
         }
 
         throw new NoSuchJobException();

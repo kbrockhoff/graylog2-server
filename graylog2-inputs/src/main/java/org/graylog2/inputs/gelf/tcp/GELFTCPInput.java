@@ -1,6 +1,4 @@
 /**
- * Copyright 2012 Lennart Koopmann <lennart@socketfeed.com>
- *
  * This file is part of Graylog2.
  *
  * Graylog2 is free software: you can redistribute it and/or modify
@@ -15,75 +13,57 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with Graylog2.  If not, see <http://www.gnu.org/licenses/>.
- *
  */
-
 package org.graylog2.inputs.gelf.tcp;
 
-import com.codahale.metrics.Gauge;
 import com.codahale.metrics.MetricRegistry;
-import com.google.common.util.concurrent.ThreadFactoryBuilder;
-import org.graylog2.inputs.gelf.GELFInputBase;
-import org.graylog2.plugin.inputs.*;
-import org.jboss.netty.bootstrap.ServerBootstrap;
-import org.jboss.netty.channel.socket.nio.NioServerSocketChannelFactory;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import com.google.inject.Inject;
+import com.google.inject.assistedinject.Assisted;
+import com.google.inject.assistedinject.AssistedInject;
+import org.graylog2.inputs.codecs.GelfCodec;
+import org.graylog2.inputs.transports.TcpTransport;
+import org.graylog2.plugin.LocalMetricRegistry;
+import org.graylog2.plugin.configuration.Configuration;
+import org.graylog2.plugin.inputs.MessageInput;
 
-import java.util.Map;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+public class GELFTCPInput extends MessageInput {
 
-/**
- * @author Lennart Koopmann <lennart@socketfeed.com>
- */
-public class GELFTCPInput extends GELFInputBase {
+    private static final String NAME = "GELF TCP";
 
-    private static final Logger LOG = LoggerFactory.getLogger(GELFTCPInput.class);
+    @AssistedInject
+    public GELFTCPInput(MetricRegistry metricRegistry,
+                        @Assisted Configuration configuration,
+                        TcpTransport.Factory tcpFactory,
+                        GelfCodec.Factory gelfCodecFactory,
+                        LocalMetricRegistry localRegistry,
+                        Config config,
+                        Descriptor descriptor) {
+        super(metricRegistry, tcpFactory.create(configuration), localRegistry, gelfCodecFactory.create(configuration),
+              config, descriptor);
+    }
 
-    public static final String NAME = "GELF TCP";
+    public interface Factory extends MessageInput.Factory<GELFTCPInput> {
+        @Override
+        GELFTCPInput create(Configuration configuration);
 
-    @Override
-    public void launch() throws MisfireException {
-        // Register throughput counter gauges.
-        for(Map.Entry<String,Gauge<Long>> gauge : throughputCounter.gauges().entrySet()) {
-            graylogServer.metrics().register(MetricRegistry.name(getUniqueReadableId(), gauge.getKey()), gauge.getValue());
-        }
+        @Override
+        Config getConfig();
 
-        // Register connection counter gauges.
-        graylogServer.metrics().register(MetricRegistry.name(getUniqueReadableId(), "open_connections"), connectionCounter.gaugeCurrent());
-        graylogServer.metrics().register(MetricRegistry.name(getUniqueReadableId(), "total_connections"), connectionCounter.gaugeTotal());
+        @Override
+        Descriptor getDescriptor();
+    }
 
-        final ExecutorService bossThreadPool = Executors.newCachedThreadPool(
-                new ThreadFactoryBuilder()
-                        .setNameFormat("input-" + getId() + "-gelftcp-boss-%d")
-                        .build());
-
-        final ExecutorService workerThreadPool = Executors.newCachedThreadPool(
-                new ThreadFactoryBuilder()
-                        .setNameFormat("input-" + getId() + "-gelftcp-worker-%d")
-                        .build());
-
-        bootstrap = new ServerBootstrap(
-                new NioServerSocketChannelFactory(bossThreadPool, workerThreadPool)
-        );
-
-        bootstrap.setPipelineFactory(new GELFTCPPipelineFactory(graylogServer, this, throughputCounter, connectionCounter));
-        bootstrap.setOption("child.receiveBufferSize", getRecvBufferSize());
-
-        try {
-            channel = ((ServerBootstrap) bootstrap).bind(socketAddress);
-            LOG.info("Started TCP GELF input on {}", socketAddress);
-        } catch (Exception e) {
-            String msg = "Could not bind TCP GELF input to address " + socketAddress;
-            LOG.error(msg, e);
-            throw new MisfireException(msg);
+    public static class Descriptor extends MessageInput.Descriptor {
+        @Inject
+        public Descriptor() {
+            super(NAME, false, "");
         }
     }
 
-    @Override
-    public String getName() {
-        return NAME;
+    public static class Config extends MessageInput.Config {
+        @Inject
+        public Config(TcpTransport.Factory transport, GelfCodec.Factory codec) {
+            super(transport.getConfig(), codec.getConfig());
+        }
     }
-
 }

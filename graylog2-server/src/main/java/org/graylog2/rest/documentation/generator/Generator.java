@@ -1,6 +1,4 @@
 /**
- * Copyright 2013 Lennart Koopmann <lennart@torch.sh>
- *
  * This file is part of Graylog2.
  *
  * Graylog2 is free software: you can redistribute it and/or modify
@@ -15,7 +13,6 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with Graylog2.  If not, see <http://www.gnu.org/licenses/>.
- *
  */
 package org.graylog2.rest.documentation.generator;
 
@@ -33,18 +30,35 @@ import com.google.common.collect.Lists;
 import com.google.common.collect.Maps;
 import com.google.common.collect.Sets;
 import com.google.common.primitives.Primitives;
-import org.graylog2.Core;
-import org.graylog2.rest.documentation.annotations.*;
+import com.wordnik.swagger.annotations.Api;
+import com.wordnik.swagger.annotations.ApiOperation;
+import com.wordnik.swagger.annotations.ApiParam;
+import com.wordnik.swagger.annotations.ApiResponse;
+import com.wordnik.swagger.annotations.ApiResponses;
+import org.graylog2.ServerVersion;
 import org.reflections.Reflections;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import javax.ws.rs.*;
+import javax.ws.rs.DELETE;
+import javax.ws.rs.GET;
+import javax.ws.rs.HeaderParam;
+import javax.ws.rs.POST;
+import javax.ws.rs.PUT;
+import javax.ws.rs.Path;
+import javax.ws.rs.PathParam;
+import javax.ws.rs.Produces;
+import javax.ws.rs.QueryParam;
 import javax.ws.rs.core.Response;
 import java.lang.annotation.Annotation;
 import java.lang.reflect.Method;
+import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
-import java.util.*;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 /**
  * This is generating API information in Swagger format.
@@ -112,7 +126,7 @@ public class Generator {
             Map<String, String> info = Maps.newHashMap();
             info.put("title", "Graylog2 REST API");
 
-            overviewResult.put("apiVersion", Core.GRAYLOG2_VERSION.toString());
+            overviewResult.put("apiVersion", ServerVersion.VERSION.toString());
             overviewResult.put("swaggerVersion", EMULATED_SWAGGER_VERSION);
             overviewResult.put("apis", apis);
 
@@ -238,6 +252,7 @@ public class Generator {
         // generate the json schema for the auto-mapped return types
         Map<String, Object> models = Maps.newHashMap();
         for (Class<?> type : modelTypes) {
+
             // skip non-jackson mapped classes (like Response)
             if (!type.isAnnotationPresent(JsonAutoDetect.class)) {
                 continue;
@@ -256,7 +271,7 @@ public class Generator {
         result.put("basePath", basePath);
         result.put("models", models);
         result.put("resourcePath", cleanRoute(route));
-        result.put("apiVersion", Core.GRAYLOG2_VERSION.toString());
+        result.put("apiVersion", ServerVersion.VERSION.toString());
         result.put("swaggerVersion", EMULATED_SWAGGER_VERSION);
 
         return result;
@@ -274,11 +289,11 @@ public class Generator {
             for (Annotation annotation : annotations) {
                 if (annotation instanceof ApiParam) {
                     ApiParam apiParam = (ApiParam) annotation;
-                    parameter.put("name", apiParam.title());
-                    parameter.put("description", apiParam.description());
+                    parameter.put("name", apiParam.name());
+                    parameter.put("description", apiParam.value());
                     parameter.put("required", apiParam.required());
-                    param.setName(apiParam.title());
-                    param.setDescription(apiParam.description());
+                    param.setName(apiParam.name());
+                    param.setDescription(apiParam.value());
                     param.setIsRequired(apiParam.required());
 
                     Type parameterClass = method.getGenericParameterTypes()[i];
@@ -420,11 +435,19 @@ public class Generator {
         }
 
         public void setType(Type type) {
-            final Class<?> klass = (Class<?>) type;
-            if (klass.isPrimitive()) {
-                type = Primitives.wrap(klass);
+            final Class<?> klass;
+
+            if (type instanceof ParameterizedType) {
+                klass = (Class<?>) ((ParameterizedType) type).getRawType();
+            } else {
+                klass = (Class<?>) type;
             }
-            this.type = (Class) type;
+
+            if (klass.isPrimitive()) {
+                this.type = Primitives.wrap(klass);
+            } else {
+                this.type = klass;
+            }
         }
 
         @JsonIgnore

@@ -1,6 +1,4 @@
 /**
- * Copyright 2013 Lennart Koopmann <lennart@torch.sh>
- *
  * This file is part of Graylog2.
  *
  * Graylog2 is free software: you can redistribute it and/or modify
@@ -15,7 +13,6 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with Graylog2.  If not, see <http://www.gnu.org/licenses/>.
- *
  */
 package org.graylog2.rest.resources.sources;
 
@@ -27,14 +24,16 @@ import org.apache.shiro.authz.annotation.RequiresAuthentication;
 import org.apache.shiro.authz.annotation.RequiresPermissions;
 import org.graylog2.indexer.IndexHelper;
 import org.graylog2.indexer.results.TermsResult;
+import org.graylog2.indexer.searches.Searches;
 import org.graylog2.indexer.searches.timeranges.InvalidRangeParametersException;
 import org.graylog2.indexer.searches.timeranges.RelativeRange;
-import org.graylog2.rest.documentation.annotations.*;
+import com.wordnik.swagger.annotations.*;
 import org.graylog2.rest.resources.RestResource;
 import org.graylog2.security.RestPermissions;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javax.inject.Inject;
 import javax.ws.rs.*;
 import javax.ws.rs.core.MediaType;
 import java.util.Map;
@@ -59,6 +58,13 @@ public class SourcesResource extends RestResource {
             .expireAfterWrite(10, TimeUnit.SECONDS)
             .build();
 
+    private final Searches searches;
+
+    @Inject
+    public SourcesResource(Searches searches) {
+        this.searches = searches;
+    }
+
     @GET @Timed
     @ApiOperation(
             value = "Get a list of all sources (not more than 5000) that have messages in the current indices. " +
@@ -71,7 +77,7 @@ public class SourcesResource extends RestResource {
 
     @Produces(MediaType.APPLICATION_JSON)
     public String list(
-            @ApiParam(title = "range", description = "Relative timeframe to search in. See method description.", required = true)
+            @ApiParam(name = "range", value = "Relative timeframe to search in. See method description.", required = true)
             @QueryParam("range")
             final int range) {
         TermsResult sources;
@@ -80,7 +86,7 @@ public class SourcesResource extends RestResource {
                 @Override
                 public TermsResult call() throws Exception {
                     try {
-                        return core.getIndexer().searches().terms("source", 5000, "*", new RelativeRange(range));
+                        return searches.terms("source", 5000, "*", new RelativeRange(range));
                     } catch (IndexHelper.InvalidRangeFormatException e) {
                         throw new ExecutionException(e);
                     } catch (InvalidRangeParametersException e) {
