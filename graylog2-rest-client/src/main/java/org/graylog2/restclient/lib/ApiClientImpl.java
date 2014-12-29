@@ -22,12 +22,13 @@ import com.fasterxml.jackson.databind.PropertyNamingStrategy;
 import com.fasterxml.jackson.datatype.guava.GuavaModule;
 import com.fasterxml.jackson.datatype.joda.JodaModule;
 import com.google.common.base.Preconditions;
+import com.google.common.collect.ArrayListMultimap;
+import com.google.common.collect.ListMultimap;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Maps;
 import com.google.common.collect.Sets;
+import com.google.common.net.HttpHeaders;
 import com.google.common.net.MediaType;
-import com.google.inject.Inject;
-import com.google.inject.Singleton;
 import com.google.inject.name.Named;
 import com.ning.http.client.AsyncCompletionHandler;
 import com.ning.http.client.AsyncHttpClient;
@@ -47,9 +48,9 @@ import org.graylog2.restclient.models.api.responses.EmptyResponse;
 import org.graylog2.restroutes.PathMethod;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import play.libs.F;
-import play.mvc.Http;
 
+import javax.inject.Inject;
+import javax.inject.Singleton;
 import javax.ws.rs.core.UriBuilder;
 import java.io.IOException;
 import java.net.ConnectException;
@@ -220,7 +221,7 @@ class ApiClientImpl implements ApiClient {
         private ApiRequest body;
         private final Class<T> responseClass;
         private final ArrayList<Object> pathParams = Lists.newArrayList();
-        private final ArrayList<F.Tuple<String, String>> queryParams = Lists.newArrayList();
+        private final ListMultimap<String, String> queryParams = ArrayListMultimap.create();
         private Set<Integer> expectedResponseCodes = Sets.newHashSet();
         private TimeUnit timeoutUnit = TimeUnit.MILLISECONDS;
         private long timeoutValue = defaultTimeout;
@@ -317,7 +318,7 @@ class ApiClientImpl implements ApiClient {
 
         @Override
         public ApiRequestBuilder<T> queryParam(String name, String value) {
-            queryParams.add(F.Tuple(name, value));
+            queryParams.put(name, value);
             return this;
         }
 
@@ -412,7 +413,7 @@ class ApiClientImpl implements ApiClient {
             ensureAuthentication();
             final URL url = prepareUrl(target);
             final AsyncHttpClient.BoundRequestBuilder requestBuilder = requestBuilderForUrl(url);
-            requestBuilder.addHeader(Http.HeaderNames.ACCEPT, mediaType.toString());
+            requestBuilder.addHeader(HttpHeaders.ACCEPT, mediaType.toString());
 
             final Request request = requestBuilder.build();
             if (LOG.isDebugEnabled()) {
@@ -421,7 +422,7 @@ class ApiClientImpl implements ApiClient {
 
             // Set 200 OK as standard if not defined.
             if (expectedResponseCodes.isEmpty()) {
-                expectedResponseCodes.add(Http.Status.OK);
+                expectedResponseCodes.add(200);
             }
 
             try {
@@ -523,7 +524,7 @@ class ApiClientImpl implements ApiClient {
                 nodes = serverNodes.all();
             }
 
-            Collection<F.Tuple<ListenableFuture<Response>, Node>> requests = Lists.newArrayList();
+            final Map<Node, ListenableFuture<Response>> requests = Maps.newHashMap();
             final Collection<Response> responses = Lists.newArrayList();
 
             ensureAuthentication();
@@ -531,7 +532,7 @@ class ApiClientImpl implements ApiClient {
                 final URL url = prepareUrl(currentNode);
                 try {
                     final AsyncHttpClient.BoundRequestBuilder requestBuilder = requestBuilderForUrl(url);
-                    requestBuilder.addHeader(Http.HeaderNames.ACCEPT, mediaType.toString());
+                    requestBuilder.addHeader(HttpHeaders.ACCEPT, mediaType.toString());
                     if (LOG.isDebugEnabled()) {
                         LOG.debug("API Request: {}", requestBuilder.build().toString());
                     }
@@ -542,15 +543,15 @@ class ApiClientImpl implements ApiClient {
                             return response;
                         }
                     });
-                    requests.add(new F.Tuple<>(future, currentNode));
+                    requests.put(currentNode, future);
                 } catch (IOException e) {
                     LOG.error("Cannot execute request", e);
                     currentNode.markFailure();
                 }
             }
-            for (F.Tuple<ListenableFuture<Response>, Node> requestAndNode : requests) {
-                final ListenableFuture<Response> request = requestAndNode._1;
-                final Node node = requestAndNode._2;
+            for (Map.Entry<Node, ListenableFuture<Response>> requestAndNode : requests.entrySet()) {
+                final Node node = requestAndNode.getKey();
+                final ListenableFuture<Response> request = requestAndNode.getValue();
                 try {
                     final Response response = request.get(timeoutValue, timeoutUnit);
                     node.touch();
@@ -608,7 +609,7 @@ class ApiClientImpl implements ApiClient {
                 if (method != Method.PUT && method != Method.POST) {
                     throw new IllegalArgumentException("Cannot set request body on non-PUT or POST requests.");
                 }
-                requestBuilder.addHeader("Content-Type", "application/json; charset=utf-8");
+                requestBuilder.addHeader(HttpHeaders.CONTENT_TYPE, "application/json; charset=utf-8");
                 requestBuilder.setBodyEncoding("UTF-8");
                 requestBuilder.setBody(body.toJson());
             } else if (method == Method.POST) {
@@ -641,8 +642,15 @@ class ApiClientImpl implements ApiClient {
                 String path = MessageFormat.format(pathTemplate, pathParams.toArray());
                 final UriBuilder uriBuilder = UriBuilder.fromUri(target.getTransportAddress());
                 uriBuilder.path(path);
-                for (F.Tuple<String, String> queryParam : queryParams) {
-                    uriBuilder.queryParam(queryParam._1, queryParam._2);
+                for (String key : queryParams.keySet()) {
+                    for (String value : queryParams.get(key)) {
+                        // Jersey's UriBuilderImpl doesn't encode double quotes, which is correct per RFC 3986
+                        // (http://tools.ietf.org/html/rfc3986#section-3.4), but causes problems down the stack,
+                        // see https://github.com/Graylog2/graylog2-server/issues/793
+                        // So we fall back manually encoding double quotes right now because URLEncoder.encode does
+                        // too much and we'd end up with partially double encoded URIs. F... my life.
+                        uriBuilder.queryParam(key, value.replace("\"", "%22"));
+                    }
                 }
 
                 if (unauthenticated && sessionId != null) {

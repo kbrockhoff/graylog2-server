@@ -16,8 +16,6 @@
  */
 package org.graylog2.streams;
 
-import com.codahale.metrics.InstrumentedExecutorService;
-import com.codahale.metrics.InstrumentedThreadFactory;
 import com.codahale.metrics.Meter;
 import com.codahale.metrics.MetricRegistry;
 import com.codahale.metrics.Timer;
@@ -49,6 +47,8 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+
+import static com.codahale.metrics.MetricRegistry.name;
 
 /**
  * Routes a GELF message to its streams.
@@ -90,14 +90,11 @@ public class StreamRouter {
     }
 
     private ExecutorService executorService() {
-        return new InstrumentedExecutorService(Executors.newCachedThreadPool(threadFactory()), metricRegistry);
-    }
-
-    private ThreadFactory threadFactory() {
-        return new InstrumentedThreadFactory(new ThreadFactoryBuilder()
+        final ThreadFactory threadFactory = new ThreadFactoryBuilder()
                 .setNameFormat("stream-router-%d")
                 .setDaemon(true)
-                .build(), metricRegistry);
+                .build();
+        return Executors.newCachedThreadPool(threadFactory);
     }
 
     private AtomicInteger getFaultCount(String streamId) {
@@ -203,7 +200,7 @@ public class StreamRouter {
     protected Meter getIncomingMeter(String streamId) {
         Meter meter = this.streamIncomingMeters.get(streamId);
         if (meter == null) {
-            meter = metricRegistry.meter(MetricRegistry.name(Stream.class, streamId, "incomingMessages"));
+            meter = metricRegistry.meter(name(Stream.class, streamId, "incomingMessages"));
             this.streamIncomingMeters.put(streamId, meter);
         }
 
@@ -213,7 +210,7 @@ public class StreamRouter {
     protected Timer getExecutionTimer(String streamId) {
         Timer timer = this.streamExecutionTimers.get(streamId);
         if (timer == null) {
-            timer = metricRegistry.timer(MetricRegistry.name(Stream.class, streamId, "executionTime"));
+            timer = metricRegistry.timer(name(Stream.class, streamId, "executionTime"));
             this.streamExecutionTimers.put(streamId, timer);
         }
 
@@ -223,7 +220,7 @@ public class StreamRouter {
     protected Meter getExceptionMeter(String streamId) {
         Meter meter = this.streamExceptionMeters.get(streamId);
         if (meter == null) {
-            meter = metricRegistry.meter(MetricRegistry.name(Stream.class, streamId, "matchingExceptions"));
+            meter = metricRegistry.meter(name(Stream.class, streamId, "matchingExceptions"));
             this.streamExceptionMeters.put(streamId, meter);
         }
 
@@ -233,7 +230,7 @@ public class StreamRouter {
     protected Meter getStreamRuleTimeoutMeter(String streamId) {
         Meter meter = this.streamRuleTimeoutMeters.get(streamId);
         if (meter == null) {
-            meter = metricRegistry.meter(MetricRegistry.name(Stream.class, streamId, "ruleTimeouts"));
+            meter = metricRegistry.meter(name(Stream.class, streamId, "ruleTimeouts"));
             this.streamRuleTimeoutMeters.put(streamId, meter);
         }
 
@@ -243,7 +240,7 @@ public class StreamRouter {
     protected Meter getStreamFaultsExceededMeter(String streamId) {
         Meter meter = this.streamFaultsExceededMeters.get(streamId);
         if (meter == null) {
-            meter = metricRegistry.meter(MetricRegistry.name(Stream.class, streamId, "faultsExceeded"));
+            meter = metricRegistry.meter(name(Stream.class, streamId, "faultsExceeded"));
             this.streamFaultsExceededMeters.put(streamId, meter);
         }
 

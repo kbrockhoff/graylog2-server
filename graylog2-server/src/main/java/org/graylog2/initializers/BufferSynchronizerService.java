@@ -19,6 +19,7 @@ package org.graylog2.initializers;
 import com.codahale.metrics.InstrumentedExecutorService;
 import com.codahale.metrics.MetricRegistry;
 import com.google.common.util.concurrent.AbstractIdleService;
+import com.google.common.util.concurrent.ThreadFactoryBuilder;
 import org.graylog2.Configuration;
 import org.graylog2.buffers.Buffers;
 import org.graylog2.caches.Caches;
@@ -30,7 +31,10 @@ import javax.inject.Inject;
 import javax.inject.Singleton;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
+
+import static com.codahale.metrics.MetricRegistry.name;
 
 @Singleton
 public class BufferSynchronizerService extends AbstractIdleService {
@@ -65,7 +69,7 @@ public class BufferSynchronizerService extends AbstractIdleService {
     protected void shutDown() throws Exception {
         LOG.debug("Stopping BufferSynchronizerService");
         if (indexerAvailable && cluster.isConnectedAndHealthy()) {
-            final ExecutorService executorService = new InstrumentedExecutorService(Executors.newFixedThreadPool(2), metricRegistry);
+            final ExecutorService executorService = executorService(metricRegistry);
 
             executorService.submit(new Runnable() {
                 @Override
@@ -87,6 +91,14 @@ public class BufferSynchronizerService extends AbstractIdleService {
             LOG.warn("Elasticsearch is unavailable. Not waiting to clear buffers and caches, as we have no healthy cluster.");
         }
         LOG.debug("Stopped BufferSynchronizerService");
+    }
+
+    private ExecutorService executorService(MetricRegistry metricRegistry) {
+        final ThreadFactory threadFactory = new ThreadFactoryBuilder().setNameFormat("output-setup-service-%d").build();
+        return new InstrumentedExecutorService(
+                Executors.newFixedThreadPool(2, threadFactory),
+                metricRegistry,
+                name(this.getClass(), "executor-service"));
     }
 
     public void setIndexerUnavailable() {

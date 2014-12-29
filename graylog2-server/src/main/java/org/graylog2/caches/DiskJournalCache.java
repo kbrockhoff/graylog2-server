@@ -17,7 +17,6 @@
 package org.graylog2.caches;
 
 import com.codahale.metrics.InstrumentedScheduledExecutorService;
-import com.codahale.metrics.InstrumentedThreadFactory;
 import com.codahale.metrics.MetricRegistry;
 import com.codahale.metrics.Timer;
 import com.google.common.util.concurrent.ThreadFactoryBuilder;
@@ -134,14 +133,8 @@ public abstract class DiskJournalCache implements InputCache, OutputCache {
     }
 
     private ScheduledExecutorService commitExecutorService() {
-        return new InstrumentedScheduledExecutorService(
-                Executors.newSingleThreadScheduledExecutor(threadFactory()), metricRegistry);
-    }
-
-    private ThreadFactory threadFactory() {
-        return new InstrumentedThreadFactory(
-                new ThreadFactoryBuilder().setNameFormat("disk-journal-" + getDbFileName() + "-%d").build(),
-                metricRegistry);
+        final ThreadFactory threadFactory = new ThreadFactoryBuilder().setNameFormat("disk-journal-" + getDbFileName() + "-%d").build();
+        return new InstrumentedScheduledExecutorService(Executors.newSingleThreadScheduledExecutor(threadFactory), metricRegistry);
     }
 
     @Override
@@ -149,25 +142,28 @@ public abstract class DiskJournalCache implements InputCache, OutputCache {
         if (LOG.isTraceEnabled()) {
             LOG.trace("Adding message to cache: {}", message.toString());
         }
+
         if (db.isClosed()) {
+            LOG.trace("Database is closed. Not adding message.");
             return;
         }
-        final Timer.Context time = addTimer.time();
-        try {
+
+        try (final Timer.Context time = addTimer.time()) {
             if (queue.offer(serializer.serializeToBytes(message))) {
                 counter.incrementAndGet();
             }
         } catch (IOException e) {
             LOG.error("Unable to enqueue message", e);
-        } finally {
-            time.stop();
+        } catch (IllegalAccessError e) {
+            throw new IllegalStateException("Error while accessing database", e);
         }
     }
 
     @Override
     public void add(Collection<Message> m) {
-        for (Message message : m)
+        for (Message message : m) {
             add(message);
+        }
     }
 
     @Override
@@ -175,7 +171,9 @@ public abstract class DiskJournalCache implements InputCache, OutputCache {
         if (LOG.isTraceEnabled()) {
             LOG.trace("Consuming message from cache");
         }
+
         if (db.isClosed()) {
+            LOG.trace("Database is closed. Not consuming message.");
             return null;
         }
 
@@ -189,7 +187,10 @@ public abstract class DiskJournalCache implements InputCache, OutputCache {
             LOG.error("Interrupted while dequeueing message: ", e);
         } catch (IOException e) {
             LOG.error("Error deserializing message", e);
+        } catch (IllegalAccessError e) {
+            throw new IllegalStateException("Error while accessing database", e);
         }
+
         return null;
     }
 
@@ -198,7 +199,9 @@ public abstract class DiskJournalCache implements InputCache, OutputCache {
         if (LOG.isTraceEnabled()) {
             LOG.trace("Consuming message from cache");
         }
+
         if (db.isClosed()) {
+            LOG.trace("Database is closed. Not consuming message.");
             return 0;
         }
 
@@ -227,6 +230,7 @@ public abstract class DiskJournalCache implements InputCache, OutputCache {
     @Override
     public int size() {
         if (db.isClosed()) {
+            LOG.trace("Database is closed. Not calculating size.");
             return 0;
         } else {
             return counter.intValue();
@@ -240,20 +244,24 @@ public abstract class DiskJournalCache implements InputCache, OutputCache {
 
     private void commit() {
         if (db.isClosed()) {
+            LOG.trace("Database is closed. Not committing to disk.");
             return;
         }
-        final Timer.Context time = commitTimer.time();
-        if (LOG.isDebugEnabled()) {
-            LOG.debug("Committing {} (entries {})", getDbFileName(), size());
+
+        try (final Timer.Context time = commitTimer.time()) {
+            if (LOG.isDebugEnabled()) {
+                LOG.debug("Committing {} (entries {})", getDbFileName(), size());
+            }
+            db.commit();
         }
-        db.commit();
-        time.stop();
     }
 
     private void compact() {
         if (db.isClosed()) {
+            LOG.trace("Database is closed. Not compacting.");
             return;
         }
+
         final long currSize = store.getCurrSize();
 
         db.compact();
